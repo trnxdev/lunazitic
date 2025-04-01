@@ -1,0 +1,6 @@
+.zig-cache
+zig-out
+lunazitic_ast.txt
+lunazitic_bytecode.txt
+lunazitic_vm_usage.txt
+callgrind.out.*

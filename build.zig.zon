@@ -1,0 +1,14 @@
+.{
+    .name = .smollscript,
+    .fingerprint = 0xcd95f15756a1b090,
+    .version = "0.0.0",
+    .dependencies = .{ .jdz_allocator = .{
+        .url = "https://github.com/kython28/jdz_allocator/archive/b8034dc0bcc6197064910a9982be68ffea261360.tar.gz",
+        .hash = "jdz_allocator-0.1.1-MT50pr1OAgCRgixFMufnta-ZTRDaX-mpowH-q2VwyXfk",
+    } },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
