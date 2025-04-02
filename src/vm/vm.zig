@@ -407,31 +407,6 @@ pub inline fn bin_op(
     }
 }
 
-pub fn resolvePairsOwned(self: *@This(), values: []Value) ![]Value {
-    const new_values = try self.allocator.alloc(Value, 255);
-
-    var actual_assigned: usize = 0;
-    var assigned: usize = 0;
-
-    for (values, 0..) |val, i| {
-        if (val.isObjectOfType(.Tuple)) {
-            actual_assigned += 1;
-            const tuple = val.asObjectOfType(.Tuple);
-            for (tuple.values, 0..) |tupl, j| {
-                assigned += 1;
-                new_values[i + j] = tupl;
-            }
-            continue;
-        } else {
-            new_values[i] = val;
-            actual_assigned += 1;
-            assigned = actual_assigned;
-        }
-    }
-
-    return new_values[0..assigned];
-}
-
 pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.ObjClosure, scope: *Scope) !void {
     // self.tags_ran[@intFromEnum(std.meta.activeTag(instr))] += 1;
     var lock_pc: bool = false;
@@ -443,7 +418,8 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
         .unwrap_tuple_save => |op_list| {
             self.allocator.free(self.save);
             const values = try self.resolveOperandListToValues(op_list, closure, scope);
-            const resolved_values = try self.resolvePairsOwned(values);
+            const resolved_values = try self.extractTuples(values, 255);
+            self.allocator.free(values);
             self.save = resolved_values;
         },
         .unwrap_tuple_locals => |utl| {
