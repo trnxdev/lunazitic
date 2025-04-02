@@ -652,6 +652,7 @@ pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instru
 
             const dest = try worker.allocateReg();
 
+            // TODO: or should also use short-cut evalutiaonsfaifjasjfsa
             if (b.Op == .And) {
                 try worker.instructions.append(self.allocator, Instruction{ .copy = .{
                     .src = lhs,
@@ -675,9 +676,6 @@ pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instru
 
                 return dest;
             }
-
-            if (b.Op == .Or)
-                @panic("TODO");
 
             const rhs = try self.compileExp(b.Right.*, worker);
             defer worker.freeReg(rhs);

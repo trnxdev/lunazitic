@@ -80,6 +80,7 @@ pub fn init(
     for (vm.metatables_for_primitives) |*mpt| mpt.* = try Object.ObjTable.createIndependant(vm.allocator);
 
     try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "print")).object.asValue(), (try Object.ObjNativeFunction.create(vm, &print)).object.asValue());
+    try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "tostring")).object.asValue(), (try Object.ObjNativeFunction.create(vm, &tostring)).object.asValue());
     try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "assert")).object.asValue(), (try Object.ObjNativeFunction.create(vm, &assert)).object.asValue());
     try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "next")).object.asValue(), (try Object.ObjNativeFunction.create(vm, &next)).object.asValue());
     try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "pairs")).object.asValue(), (try Object.ObjNativeFunction.create(vm, &pairs)).object.asValue());
@@ -165,39 +166,13 @@ pub fn next(vm: *VM, _: *Scope, args: []Value) anyerror!Value {
 }
 
 pub fn print(vm: *VM, scope: *Scope, args: []const Value) anyerror!Value {
-    _ = vm;
     _ = scope;
     const stdout = (std.io.getStdOut()).writer();
 
     for (args, 0..) |arg, i| {
-        if (arg.isObject()) o: {
-            const obj = arg.asObject();
-
-            if (arg.isObjectOfType(.String)) {
-                try stdout.writeAll(arg.asObjectOfType(.String).value);
-                break :o;
-            }
-
-            const obj_type_str = switch (std.meta.activeTag(obj.*)) {
-                .Table => "table",
-                .Function => "function",
-                .NativeFunction => "function:n",
-                .Closure => "function:c",
-                .String => unreachable,
-                .Tuple => "THIS_SHOULD_NOT_BE_PRINTED_tuple",
-            };
-
-            try stdout.print("{s}: 0x{x}", .{ obj_type_str, @intFromPtr(obj) });
-        } else if (arg.isNumber()) {
-            try stdout.print("{d}", .{arg.asNumber()});
-        } else if (arg.isBool()) {
-            try stdout.print("{s}", .{if (arg.asBool()) "true" else "false"});
-        } else if (arg.isNil()) {
-            try stdout.print("nil", .{});
-        } else {
-            try stdout.print("THIS_SHOULD_NOT_BE_PRINTED_DEFAULT", .{});
-        }
-
+        const allocated, const stringifed = try tostring_internal(vm.allocator, arg);
+        defer if (allocated) vm.allocator.free(stringifed);
+        try stdout.writeAll(stringifed);
         if (i + 1 < args.len)
             try stdout.writeByte('\t');
     }
@@ -205,6 +180,48 @@ pub fn print(vm: *VM, scope: *Scope, args: []const Value) anyerror!Value {
     try stdout.writeByte(std.ascii.control_code.lf);
 
     return Value.initNil();
+}
+
+fn tostring_internal(allocator: std.mem.Allocator, value: Value) !struct { bool, []const u8 } {
+    if (value.isObject()) {
+        const obj = value.asObject();
+
+        if (value.isObjectOfType(.String))
+            return .{ false, value.asObjectOfType(.String).value };
+
+        const obj_type_str = switch (std.meta.activeTag(obj.*)) {
+            .Table => "table",
+            .Function => "function",
+            .NativeFunction => "function:n",
+            .Closure => "function:c",
+            .String => unreachable,
+            .Tuple => "THIS_SHOULD_NOT_BE_PRINTED_tuple",
+        };
+
+        return .{ true, try std.fmt.allocPrint(allocator, "{s}: 0x{x}", .{ obj_type_str, @intFromPtr(obj) }) };
+    } else if (value.isNumber()) {
+        return .{ true, try std.fmt.allocPrint(allocator, "{d}", .{value.asNumber()}) };
+    } else if (value.isBool()) {
+        const str_bool: []const u8 = if (value.asBool()) "true" else "false";
+        return .{ false, str_bool };
+    } else if (value.isNil()) {
+        return .{ false, "nil" };
+    }
+
+    return .{ false, "THIS_SHOULD_NOT_BE_PRINTED_default" };
+}
+
+pub fn tostring(vm: *VM, _: *Scope, args: []const Value) anyerror!Value {
+    if (args.len < 1)
+        return error.ValueExpected;
+
+    const arg = args[0];
+    const allocated, const stringified = try tostring_internal(vm.allocator, arg);
+
+    return (try if (allocated)
+        Object.ObjString.createMoved(vm, @constCast(stringified))
+    else
+        Object.ObjString.create(vm, stringified)).object.asValue();
 }
 
 pub fn assert(vm: *VM, scope: *Scope, args: []Value) anyerror!Value {
