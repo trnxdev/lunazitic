@@ -116,6 +116,8 @@ pub fn deinit(self: *@This()) void {
     defer for (self.values.items) |item| {
         item.deinit(self.allocator);
     };
+
+    self.allocator.free(self.metatables_for_primitives);
 }
 
 pub fn allocateObject(self: *@This()) !*Object.ObjObject {
@@ -133,6 +135,7 @@ pub fn pairs(vm: *VM, _: *Scope, args: []Value) anyerror!Value {
         return error.BadArgument;
 
     const return_vals = try vm.allocator.alloc(Value, 3);
+
     // if next is nil'd by a user, it will continue to work, that's why it's a reference in internals
     return_vals[0] = vm.internals.reference_to_next.object.asValue();
     return_vals[1] = args[0];
@@ -299,14 +302,13 @@ pub fn newScopeInherit(self: *@This(), scope: *Scope) !*Scope {
 
 // "Memory is infinite, for now."
 pub fn destroyScope(self: *@This(), scope: *Scope) void {
-    //  if (scope.return_slot.values.len > 0) {
-    //      self.allocator.free(scope.return_slot.values);
-    //  }
-    //scope.return_slot.destroy(self.allocator);
-    //   scope.locals.deinit(self.allocator);
-    //  self.allocator.destroy(scope);
-    _ = self;
-    _ = scope;
+    if (scope.return_slot) |rs| {
+        rs.deinit(self.allocator);
+    }
+
+    if (scope.varargs) |va| {
+        va.deinit(self.allocator);
+    }
 }
 
 pub inline fn getOperand(self: *@This(), op: Compiler.Instruction.Operand, closure: *Object.ObjClosure, scope: *Scope) !Value {
@@ -344,10 +346,7 @@ pub inline fn bin_op(
 
     // FIXME Both and and or use short-cut evaluation, they come before evaluating rhs
     switch (op) {
-        .Or => {
-            @panic("TODO");
-        },
-        .And => std.debug.panic("Unreachable at {}", .{scope.pc}),
+        .Or, .And => std.debug.panic("Unreachable at {}", .{scope.pc}),
         .Eql => {
             dest.* = VM.Value.initBool(self.sameValues(left, right));
         },
@@ -421,12 +420,6 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
             const resolved_values = try self.extractTuples(values, 255);
             self.allocator.free(values);
             self.save = resolved_values;
-        },
-        .unwrap_tuple_locals => |utl| {
-            const tuple = (try self.getOperand(utl.tuple, closure, scope)).asObjectOfType(.Tuple);
-
-            for (tuple.values, utl.dest) |tupl, dest|
-                scope.locals[dest] = tupl;
         },
         .set_local_from_constant => |slfc| {
             scope.locals[slfc.local] = closure.func.constants[slfc.constant];
@@ -644,9 +637,16 @@ const MAX_ARGS = 255;
 pub fn callFunction(self: *@This(), func: Value, scope: *Scope, args: []Value) anyerror!Value {
     if (func.isObjectOfType(.NativeFunction)) {
         const native_func = func.asObjectOfType(.NativeFunction);
-        const extracted = try self.extractTuples(args, MAX_ARGS);
-        defer self.allocator.free(extracted);
-        return native_func.func(self, scope, extracted);
+
+        for (args) |arg| {
+            if (arg.isObjectOfType(.Tuple)) {
+                const extracted = try self.extractTuples(args, MAX_ARGS);
+                defer self.allocator.free(extracted);
+                return native_func.func(self, scope, extracted);
+            }
+        }
+
+        return native_func.func(self, scope, args);
     }
 
     if (!func.isObjectOfType(.Closure))
@@ -678,6 +678,8 @@ pub fn callFunction(self: *@This(), func: Value, scope: *Scope, args: []Value) a
     }
 
     try self.runClosure(closure, new_scope);
+
+    defer self.destroyScope(scope);
 
     // TODO: Tuple return
     if (new_scope.return_slot) |return_slot|
