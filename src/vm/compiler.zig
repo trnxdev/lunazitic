@@ -82,10 +82,6 @@ pub const Instruction = union(enum) {
         dest: []const Symbol,
     },
     unwrap_tuple_save: OperandList,
-    fetch_from_save_or_nil: struct {
-        index: usize,
-        dest: Operand,
-    },
 
     pub const PC = usize;
     pub const Symbol = u12; // TODO maybe usize?
@@ -116,6 +112,7 @@ pub const Instruction = union(enum) {
         local: Symbol,
         upvalue: Symbol,
         global: Symbol,
+        save_or_nil: u8,
         constant: Symbol, //TODO: u12?
     };
 };
@@ -445,15 +442,26 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
                 return;
             };
 
-            for (exps, 0..) |exp, i| {
-                const exp_result = try self.compileExp(exp.*, worker);
-                defer worker.freeReg(exp_result);
+            var reg_exps: std.ArrayListUnmanaged(Instruction.Operand) = .{};
+            defer reg_exps.deinit(self.allocator);
+            defer for (reg_exps.items) |reg_exp| worker.freeReg(reg_exp);
 
-                const local_data = try worker.getOrCreateLocalData(lvd.Names[i], false);
-                try worker.instructions.append(self.allocator, Instruction{ .copy = .{
-                    .src = exp_result,
-                    .dest = .{ .local = local_data.symbol },
-                } });
+            for (exps) |exp| {
+                const exp_result = try self.compileExp(exp.*, worker);
+                try reg_exps.append(self.allocator, exp_result);
+            }
+
+            try worker.instructions.append(self.allocator, Instruction{
+                .unwrap_tuple_save = try reg_exps.toOwnedSlice(self.allocator),
+            });
+
+            std.debug.assert(lvd.Names.len < 255);
+
+            for (lvd.Names, 0..) |name, i| {
+                const local_data = try worker.getOrCreateLocalData(name, false);
+                try worker.instructions.append(self.allocator, Instruction{
+                    .copy = .{ .src = .{ .save_or_nil = @intCast(i) }, .dest = .{ .local = local_data.symbol } },
+                });
             }
         },
         .While => |wh| {

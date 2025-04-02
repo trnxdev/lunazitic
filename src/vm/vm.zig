@@ -20,7 +20,7 @@ internals: struct {
     rng: std.Random.Xoshiro256,
 },
 values: std.ArrayListUnmanaged(*Object.ObjObject),
-scopes: [255]Scope = undefined,
+scopes: [std.math.maxInt(u8)]Scope = undefined,
 global_symbol_map: []const Compiler.KstringVSymbol = &.{},
 tags_ran: [MAX_INSTRUCTIONS]usize = [_]usize{0} ** MAX_INSTRUCTIONS,
 save: []Value = &.{},
@@ -317,6 +317,7 @@ pub inline fn getOperand(self: *@This(), op: Compiler.Instruction.Operand, closu
         .local => |l| scope.locals[l],
         .register => |r| scope.registers[r],
         .upvalue => |u| closure.upvalues[u].*,
+        .save_or_nil => |s| if (self.save.len > s) self.save[s] else Value.initNil(),
     };
 }
 
@@ -324,6 +325,7 @@ pub inline fn getOperandPtr(self: *@This(), op: Compiler.Instruction.Operand, cl
     return switch (op) {
         .constant => @panic("Cannot get constant ptr!"),
         .vararg => @panic("Cannot get vararg ptr!"),
+        .save_or_nil => @panic("Cannot get save ptr! Use instructions that use save directly."),
         .global => |g| (try self.global_vars.fields.getWithStr(self.global_symbol_map[g].k)), // TODO: optimize?
         .local => |l| &scope.locals[l],
         .register => |r| &scope.registers[r],
@@ -439,14 +441,10 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
 
     switch (instr) {
         .unwrap_tuple_save => |op_list| {
-            // TODO: Free?
+            self.allocator.free(self.save);
             const values = try self.resolveOperandListToValues(op_list, closure, scope);
             const resolved_values = try self.resolvePairsOwned(values);
             self.save = resolved_values;
-        },
-        .fetch_from_save_or_nil => |ffs| {
-            const value = if (self.save.len > ffs.index) self.save[ffs.index] else Value.initNil();
-            (try self.getOperandPtr(ffs.dest, closure, scope)).* = value;
         },
         .unwrap_tuple_locals => |utl| {
             const tuple = (try self.getOperand(utl.tuple, closure, scope)).asObjectOfType(.Tuple);
