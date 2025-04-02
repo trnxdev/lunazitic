@@ -1,3 +1,4 @@
+-- lua-users.org/lists/lua-l/2022-02/msg00085.html
 local io = io.write
 local i, j, k
 local z, b = {}, {}

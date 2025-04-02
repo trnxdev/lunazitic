@@ -111,6 +111,7 @@ pub const Instruction = union(enum) {
     };
 
     pub const Operand = union(enum) {
+        vararg: void,
         register: Reg,
         local: Symbol,
         upvalue: Symbol,
@@ -729,6 +730,9 @@ pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instru
             }
 
             return table_reg;
+        },
+        .Vararg => {
+            return .vararg;
         },
         else => |a| std.debug.panic("TODO {}", .{a}),
     };

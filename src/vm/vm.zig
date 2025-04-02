@@ -40,6 +40,7 @@ const MAX_INSTRUCTIONS = @typeInfo(Compiler.Instruction).@"union".fields.len;
 pub const Scope = struct {
     outer: ?*Scope = null,
     return_slot: ?*Object.ObjTuple = null,
+    varargs: ?*Object.ObjTuple = null,
     locals: [MAX_SYMBOL]Value = [_]Value{Value.initNil()} ** MAX_SYMBOL,
     exit: Exit = .None,
     pc: usize = 0,
@@ -281,10 +282,18 @@ fn if_truthy(value: Value) bool {
     @panic("FIXME: Should be unreachable?");
 }
 
+pub fn newScope(self: *@This(), scope: *Scope) !*Scope {
+    std.debug.assert(scope.index < self.scopes.len -| 1);
+    const new_scope: *Scope = &self.scopes[scope.index + 1];
+    new_scope.index = scope.index + 1;
+    return new_scope;
+}
+
 pub fn newScopeInherit(self: *@This(), scope: *Scope) !*Scope {
     std.debug.assert(scope.index < self.scopes.len -| 1);
     const new_scope: *Scope = &self.scopes[scope.index + 1];
     new_scope.index = scope.index + 1;
+    new_scope.varargs = scope.varargs;
     return new_scope;
 }
 
@@ -302,6 +311,7 @@ pub fn destroyScope(self: *@This(), scope: *Scope) void {
 
 pub inline fn getOperand(self: *@This(), op: Compiler.Instruction.Operand, closure: *Object.ObjClosure, scope: *Scope) !Value {
     return switch (op) {
+        .vararg => if (scope.varargs) |va| va.object.asValue() else Value.initNil(),
         .constant => |c| closure.func.constants[c],
         .global => |g| (try self.global_vars.fields.getWithStr(self.global_symbol_map[g].k)).*,
         .local => |l| scope.locals[l],
@@ -313,6 +323,7 @@ pub inline fn getOperand(self: *@This(), op: Compiler.Instruction.Operand, closu
 pub inline fn getOperandPtr(self: *@This(), op: Compiler.Instruction.Operand, closure: *Object.ObjClosure, scope: *Scope) !*Value {
     return switch (op) {
         .constant => @panic("Cannot get constant ptr!"),
+        .vararg => @panic("Cannot get vararg ptr!"),
         .global => |g| (try self.global_vars.fields.getWithStr(self.global_symbol_map[g].k)), // TODO: optimize?
         .local => |l| &scope.locals[l],
         .register => |r| &scope.registers[r],
@@ -627,20 +638,70 @@ pub fn sameValues(_: *@This(), lhs: Value, rhs: Value) bool {
     return false;
 }
 
+pub fn extractTuples(self: *@This(), args: []Value, max: usize) ![]Value {
+    const extracted = try self.allocator.alloc(Value, max);
+
+    var wrote: usize = 0;
+    var wrote_before: usize = 0;
+
+    for (args, 0..) |arg, i| {
+        if (arg.isObjectOfType(.Tuple)) {
+            for (arg.asObjectOfType(.Tuple).values, 0..) |tupl, j| {
+                if (i + j >= max)
+                    break;
+
+                extracted[i + j] = tupl;
+            }
+
+            wrote_before = wrote + 1;
+            wrote = i + arg.asObjectOfType(.Tuple).values.len;
+        } else {
+            extracted[i] = arg;
+            wrote = wrote_before;
+            wrote += 1;
+            wrote_before = wrote;
+        }
+    }
+
+    return try self.allocator.realloc(extracted, wrote);
+}
+
+const MAX_ARGS = 255;
+
 pub fn callFunction(self: *@This(), func: Value, scope: *Scope, args: []Value) anyerror!Value {
     if (func.isObjectOfType(.NativeFunction)) {
         const native_func = func.asObjectOfType(.NativeFunction);
-        return native_func.func(self, scope, args);
+        const extracted = try self.extractTuples(args, MAX_ARGS);
+        defer self.allocator.free(extracted);
+        return native_func.func(self, scope, extracted);
     }
 
     if (!func.isObjectOfType(.Closure))
         return error.NotAClosure;
 
     const closure: *Object.ObjClosure = func.asObjectOfType(.Closure);
-    const new_scope = try self.newScopeInherit(scope);
+    const new_scope = try self.newScope(scope);
 
-    for (0..args.len) |i| {
-        new_scope.locals[i] = args[i];
+    for (0..closure.func.params.len) |i| {
+        if (args[i].isObjectOfType(.Tuple)) {
+            for (i..closure.func.params.len, 0..) |j, z| {
+                if (z > args[i].asObjectOfType(.Tuple).values.len)
+                    break;
+
+                new_scope.locals[j] = args[i].asObjectOfType(.Tuple).values[z];
+            }
+        } else {
+            new_scope.locals[i] = args[i];
+        }
+    }
+
+    if (closure.func.var_arg and args.len > closure.func.params.len) {
+        const varargs = try self.allocator.alloc(Value, args.len - closure.func.params.len);
+
+        for (closure.func.params.len..args.len) |i|
+            varargs[i] = args[i];
+
+        new_scope.varargs = (try Object.ObjTuple.createMoved(self, varargs));
     }
 
     try self.runClosure(closure, new_scope);
