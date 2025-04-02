@@ -425,9 +425,8 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
         .unwrap_tuple_locals => |utl| {
             const tuple = (try self.getOperand(utl.tuple, closure, scope)).asObjectOfType(.Tuple);
 
-            for (tuple.values, utl.dest) |tupl, dest| {
+            for (tuple.values, utl.dest) |tupl, dest|
                 scope.locals[dest] = tupl;
-            }
         },
         .set_local_from_constant => |slfc| {
             scope.locals[slfc.local] = closure.func.constants[slfc.constant];

@@ -77,10 +77,6 @@ pub const Instruction = union(enum) {
         table: Operand,
         dest: Operand,
     },
-    unwrap_tuple_locals: struct {
-        tuple: Operand,
-        dest: []const Symbol,
-    },
     unwrap_tuple_save: OperandList,
 
     pub const PC = usize;
