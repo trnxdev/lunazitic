@@ -70,44 +70,33 @@ pub fn len(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
     return VM.Value.initNumber(@floatFromInt(arg.len));
 }
 
-pub fn lower(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
-    if (args.len < 1)
-        return error.InvalidArgumentCount;
+// zig fmt: off
+pub const lower = makeSimpleStringFuncOnAllocd(struct { pub fn lower(str: []u8) void {
+    for (str) |*char|
+        char.* = std.ascii.toLower(char.*);
+} }.lower);
+pub const upper = makeSimpleStringFuncOnAllocd(struct { pub fn upper(str: []u8) void {
+    for (str) |*char|
+        char.* = std.ascii.toUpper(char.*);
+} }.upper);
+pub const reverse = makeSimpleStringFuncOnAllocd(struct { pub fn upper(str: []u8) void {
+    std.mem.reverse(u8, str);
+} }.upper);
+// zig fmt: on
 
-    const string = try args[0].asStringCastNum(vm.allocator);
-    defer if (args[0].isNumber()) vm.allocator.free(string);
-    const result = try vm.allocator.alloc(u8, string.len);
-    defer vm.allocator.free(result);
+// Gives the caller an 100% allocated string that can be modified, it's automatically returned.
+fn makeSimpleStringFuncOnAllocd(func: fn ([]u8) void) fn (*VM, *VM.Scope, []VM.Value) anyerror!VM.Value {
+    return struct {
+        fn innerfunc(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
+            if (args.len < 1)
+                return error.InvalidArgumentCount;
 
-    for (string, result) |char, *i|
-        i.* = std.ascii.toLower(char);
+            var string = try args[0].asStringCastNum(vm.allocator);
+            if (!args[0].isNumber()) string = try vm.allocator.dupe(u8, string);
 
-    return (try VM.Object.ObjString.create(vm, result)).object.asValue();
-}
+            func(@constCast(string));
 
-pub fn upper(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
-    if (args.len < 1)
-        return error.InvalidArgumentCount;
-
-    const string = try args[0].asStringCastNum(vm.allocator);
-    defer if (args[0].isNumber()) vm.allocator.free(string);
-    const result = try vm.allocator.alloc(u8, string.len);
-
-    for (string, result) |char, *i|
-        i.* = std.ascii.toUpper(char);
-
-    return (try VM.Object.ObjString.createMoved(vm, result)).object.asValue();
-}
-
-pub fn reverse(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
-    if (args.len < 1)
-        return error.InvalidArgumentCount;
-
-    const string = try args[0].asStringCastNum(vm.allocator);
-    defer if (args[0].isNumber()) vm.allocator.free(string);
-
-    const owned_string = try vm.allocator.dupe(u8, string);
-    std.mem.reverse(u8, owned_string);
-
-    return (try VM.Object.ObjString.createMoved(vm, owned_string)).object.asValue();
+            return (try VM.Object.ObjString.createMoved(vm, @constCast(string))).object.asValue();
+        }
+    }.innerfunc;
 }
