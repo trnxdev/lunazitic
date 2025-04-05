@@ -170,28 +170,33 @@ pub fn next(vm: *VM, _: *Scope, args: []Value) anyerror!Value {
 }
 
 pub fn print(vm: *VM, scope: *Scope, args: []const Value) anyerror!Value {
+    _ = vm;
     _ = scope;
-    const stdout = (std.io.getStdOut()).writer();
+    var buffered = std.io.bufferedWriter(std.io.getStdOut().writer());
+    const stdout = buffered.writer().any();
 
     for (args, 0..) |arg, i| {
-        const allocated, const stringifed = try tostring_internal(vm.allocator, arg);
-        defer if (allocated) vm.allocator.free(stringifed);
-        try stdout.writeAll(stringifed);
+        try tostring_internal(arg, stdout);
         if (i + 1 < args.len)
             try stdout.writeByte('\t');
     }
 
     try stdout.writeByte(std.ascii.control_code.lf);
 
+    try buffered.flush();
+
     return Value.initNil();
 }
 
-fn tostring_internal(allocator: std.mem.Allocator, value: Value) !struct { bool, []const u8 } {
+// Returns bytes written.
+fn tostring_internal(value: Value, writer: std.io.AnyWriter) !void {
     if (value.isObject()) {
         const obj = value.asObject();
 
-        if (value.isObjectOfType(.String))
-            return .{ false, value.asObjectOfType(.String).value };
+        if (value.isObjectOfType(.String)) {
+            try writer.writeAll(value.asObjectOfType(.String).value);
+            return;
+        }
 
         const obj_type_str = switch (std.meta.activeTag(obj.*)) {
             .Table => "table",
@@ -201,18 +206,18 @@ fn tostring_internal(allocator: std.mem.Allocator, value: Value) !struct { bool,
             .String => unreachable,
             .Tuple => "THIS_SHOULD_NOT_BE_PRINTED_tuple",
         };
-
-        return .{ true, try std.fmt.allocPrint(allocator, "{s}: 0x{x}", .{ obj_type_str, @intFromPtr(obj) }) };
+        try writer.print("{s}: 0x:{x}", .{ obj_type_str, @intFromPtr(obj) });
     } else if (value.isNumber()) {
-        return .{ true, try std.fmt.allocPrint(allocator, "{d}", .{value.asNumber()}) };
+        var buf: [std.fmt.format_float.bufferSize(.decimal, f64)]u8 = undefined;
+        const str = try std.fmt.formatFloat(&buf, value.asNumber(), .{ .mode = .decimal });
+        try writer.writeAll(str);
     } else if (value.isBool()) {
-        const str_bool: []const u8 = if (value.asBool()) "true" else "false";
-        return .{ false, str_bool };
+        try writer.writeAll(if (value.asBool()) "true" else "false");
     } else if (value.isNil()) {
-        return .{ false, "nil" };
+        try writer.writeAll("nil");
+    } else {
+        try writer.writeAll("THIS_SHOULD_NOT_BE_PRINTED_default");
     }
-
-    return .{ false, "THIS_SHOULD_NOT_BE_PRINTED_default" };
 }
 
 pub fn tostring(vm: *VM, _: *Scope, args: []const Value) anyerror!Value {
@@ -220,12 +225,14 @@ pub fn tostring(vm: *VM, _: *Scope, args: []const Value) anyerror!Value {
         return error.ValueExpected;
 
     const arg = args[0];
-    const allocated, const stringified = try tostring_internal(vm.allocator, arg);
+    if (arg.isObject() and arg.isObjectOfType(.String)) {
+        return (try Object.ObjString.create(vm, arg.asObjectOfType(.String).value)).object.asValue();
+    }
 
-    return (try if (allocated)
-        Object.ObjString.createMoved(vm, @constCast(stringified))
-    else
-        Object.ObjString.create(vm, stringified)).object.asValue();
+    var buf: std.ArrayList(u8) = .init(vm.allocator);
+    try tostring_internal(arg, buf.writer().any());
+
+    return (try Object.ObjString.createMoved(vm, try buf.toOwnedSlice())).object.asValue();
 }
 
 pub fn assert(vm: *VM, scope: *Scope, args: []Value) anyerror!Value {
