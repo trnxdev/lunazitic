@@ -309,6 +309,8 @@ pub fn newScopeInherit(self: *@This(), scope: *Scope) !*Scope {
 
 // "Memory is infinite, for now."
 pub fn destroyScope(self: *@This(), scope: *Scope) void {
+    scope.pc = 0;
+
     if (scope.return_slot) |rs| {
         rs.deinit(self.allocator);
     }
@@ -685,8 +687,7 @@ pub fn callFunction(self: *@This(), func: Value, scope: *Scope, args: []Value) a
     }
 
     try self.runClosure(closure, new_scope);
-
-    defer self.destroyScope(scope);
+    defer self.destroyScope(new_scope);
 
     // TODO: Tuple return
     if (new_scope.return_slot) |return_slot|
