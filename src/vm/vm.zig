@@ -121,7 +121,7 @@ pub fn deinit(self: *@This()) void {
 }
 
 pub fn errorFmt(_: *@This(), err: anyerror, comptime log_fmt: []const u8, log_args: anytype) anyerror {
-    std.log.err("Lunazitic VM: " ++ log_fmt, log_args);
+    std.log.err("Lunazitc VM: " ++ log_fmt, log_args);
     return err;
 }
 
@@ -436,6 +436,11 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
             self.allocator.free(values);
             self.save = resolved_values;
         },
+        .unwrap_single_tuple_save => |op| {
+            self.allocator.free(self.save);
+            const resolved_values = try self.extractTuples(&.{try self.getOperand(op, closure, scope)}, 255);
+            self.save = resolved_values;
+        },
         .set_local_from_constant => |slfc| {
             scope.locals[slfc.local] = closure.func.constants[slfc.constant];
         },
@@ -450,9 +455,15 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
         .call_func => |cf| {
             const function = try self.getOperand(cf.func, closure, scope);
             var buf: [1024]Value = undefined;
-            if (cf.args.len >= 255) @panic("too much");
-            const reg_values = try self.resolveOperandListToBuf(cf.args.*, &buf, closure, scope);
-            const result = try self.callFunction(function, scope, buf[0..reg_values]);
+            var result: Value = undefined;
+
+            if (cf.args) |args| {
+                if (args.len >= 255) @panic("too much");
+                const reg_values = try self.resolveOperandListToBuf(args.*, &buf, closure, scope);
+                result = try self.callFunction(function, scope, buf[0..reg_values]);
+            } else {
+                result = try self.callFunction(function, scope, &.{});
+            }
 
             if (cf.dest) |dest|
                 (try self.getOperandPtr(dest, closure, scope)).* = result;
@@ -619,7 +630,7 @@ pub fn sameValues(_: *@This(), lhs: Value, rhs: Value) bool {
     return false;
 }
 
-pub fn extractTuples(self: *@This(), args: []Value, max: usize) ![]Value {
+pub fn extractTuples(self: *@This(), args: []const Value, max: usize) ![]Value {
     const extracted = try self.allocator.alloc(Value, max);
 
     var wrote: usize = 0;

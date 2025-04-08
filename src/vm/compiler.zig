@@ -78,6 +78,7 @@ pub const Instruction = union(enum) {
         dest: Operand,
     },
     unwrap_tuple_save: OperandList,
+    unwrap_single_tuple_save: Operand,
 
     pub const PC = usize;
     pub const Symbol = u12; // TODO maybe usize?
@@ -98,7 +99,7 @@ pub const Instruction = union(enum) {
     // TODO: VarArg
     const FuncArgsM_Dest = struct {
         func: Operand,
-        args: *OperandList, // This keeps the instruction size 32 bits
+        args: ?*OperandList, // This keeps the instruction size 32 bits
         dest: ?Operand,
     };
 
@@ -599,6 +600,52 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
             } });
             return;
         },
+        .GenericFor => |gf| {
+            if (gf.Exps.len > 1) {
+                return error.TODO;
+            }
+
+            // for i in **counter(5)**
+            const iterator = try self.compileExp(gf.Exps[0].*, worker);
+            defer worker.freeReg(iterator);
+
+            const begin = worker.instructions.items.len;
+
+            const iterator_res = try worker.allocateReg();
+            defer worker.freeReg(iterator_res);
+
+            try worker.instructions.append(self.allocator, Instruction{ .call_func = .{
+                .func = iterator,
+                .args = null,
+                .dest = iterator_res,
+            } });
+
+            const to_patch = worker.instructions.items.len;
+
+            try worker.instructions.append(self.allocator, Instruction{ .jump_if_false = .{
+                .state_reg = iterator_res,
+                .target = 0,
+            } });
+
+            try worker.instructions.append(self.allocator, Instruction{ .unwrap_single_tuple_save = iterator_res });
+
+            for (gf.Names, 0..) |name, i| {
+                if (i >= gf.Names.len) break;
+
+                const local_data = try worker.getOrCreateLocalData(name, false);
+
+                try worker.instructions.append(self.allocator, Instruction{
+                    .copy = .{ .src = .{ .save_or_nil = @intCast(i) }, .dest = .{ .local = local_data.symbol } },
+                });
+            }
+
+            for (gf.Block) |innerstat| {
+                try self.compileStat(innerstat.*, worker);
+            }
+
+            try worker.instructions.append(self.allocator, Instruction{ .jump = begin });
+            worker.instructions.items[to_patch].jump_if_false.target = worker.instructions.items.len;
+        },
         else => |a| std.debug.panic("TODO {}\n", .{a}),
     }
 }
@@ -642,6 +689,7 @@ pub fn putOptimizedBin(self: *@This(), lhs: Instruction.Operand, rhs: Instructio
         });
     }
 }
+
 // Owner owns the register
 pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instruction.Operand {
     return switch (exp) {
