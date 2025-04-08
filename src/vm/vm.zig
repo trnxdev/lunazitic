@@ -141,7 +141,6 @@ pub fn pairs(vm: *VM, _: *Scope, args: []Value) anyerror!Value {
 
     const return_vals = try vm.allocator.alloc(Value, 3);
 
-    // if next is nil'd by a user, it will continue to work, that's why it's a reference in internals
     return_vals[0] = vm.internals.reference_to_next.object.asValue();
     return_vals[1] = args[0];
     return_vals[2] = Value.initNil();
@@ -169,9 +168,89 @@ pub fn getMetaTable(self: *@This(), value: Value) ?*Object.ObjTable {
 
 // TODO: needs updating
 pub fn next(vm: *VM, _: *Scope, args: []Value) anyerror!Value {
-    _ = vm;
-    _ = args;
-    return Value.initNil();
+    var return_vals = try vm.allocator.alloc(Value, 2);
+    return_vals[0] = Value.initNil();
+    return_vals[1] = Value.initNil();
+
+    if (args.len < 1)
+        return error.InvalidArgumentCount;
+
+    if (!args[0].isObjectOfType(.Table))
+        return error.BadArgument;
+
+    const table: *Object.ObjTable = args[0].asObjectOfType(.Table);
+    var previous_maxxed: bool = false;
+
+    o: {
+        if (args.len < 2 or args[1].isNil()) {
+            return_vals[0], return_vals[1] = try table.fields.firstEntry(vm) orelse break :o;
+            break :o;
+        }
+
+        const given_key = args[1];
+
+        if (given_key.isNumber()) i: {
+            const given_key_num = given_key.asNumber();
+
+            if (!Object.ObjTable.number_belongs_in_array_part(given_key_num)) {
+                break :i;
+            }
+
+            const next_key: usize = @intFromFloat(given_key_num + 1);
+
+            if (next_key > table.fields.array_part.items.len) {
+                previous_maxxed = true;
+                break :i;
+            }
+
+            return_vals[0] = Value.initNumber(@floatFromInt(next_key));
+            return_vals[1] = table.fields.array_part.items[next_key -| 1];
+
+            break :o;
+        }
+
+        if (given_key.isObjectOfType(.String) or previous_maxxed) i: {
+            if (previous_maxxed) {
+                return_vals[0], return_vals[1] = try table.fields.firstStringEntry(vm) orelse break :i;
+                break :o;
+            }
+
+            const given_key_str = given_key.asObjectOfType(.String).value;
+            var iter = table.fields.string_part.iterator();
+
+            y: while (iter.next()) |entry| {
+                if (std.mem.eql(u8, entry.key_ptr.*, given_key_str)) {
+                    const nnext = iter.next() orelse break :y;
+                    return_vals[0] = (try Object.ObjString.create(vm, nnext.key_ptr.*)).object.asValue();
+                    return_vals[1] = nnext.value_ptr.*;
+                    break :o;
+                }
+            }
+
+            previous_maxxed = true;
+        }
+
+        if (previous_maxxed) {
+            return_vals[0], return_vals[1] = try table.fields.firstObjectEntry() orelse break :o;
+            break :o;
+        }
+
+        var iter = table.fields.hash_part.iterator();
+
+        while (iter.next()) |entry| {
+            if (!sameValues(vm, given_key, entry.key_ptr.*))
+                continue;
+
+            const nnext = iter.next() orelse break :o;
+
+            return_vals[0] = nnext.key_ptr.*;
+            return_vals[1] = nnext.value_ptr.*;
+
+            break :o;
+        }
+    }
+
+    return (try Object.ObjTuple.createMoved(vm, return_vals)).object.asValue();
 }
 
 pub fn print(vm: *VM, scope: *Scope, args: []const Value) anyerror!Value {
@@ -194,7 +273,7 @@ pub fn print(vm: *VM, scope: *Scope, args: []const Value) anyerror!Value {
 }
 
 // Returns bytes written.
-fn tostring_internal(value: Value, writer: std.io.AnyWriter) !void {
+pub fn tostring_internal(value: Value, writer: std.io.AnyWriter) !void {
     if (value.isObject()) {
         const obj = value.asObject();
 
@@ -317,9 +396,9 @@ pub fn destroyScope(self: *@This(), scope: *Scope) void {
     scope.pc = 0;
     scope.exit = .None;
 
-    if (scope.return_slot) |rs| {
-        rs.deinit(self.allocator);
-    }
+    // if (scope.return_slot) |rs| {
+    //    rs.deinit(self.allocator);
+    //}
 
     if (scope.varargs) |va| {
         va.deinit(self.allocator);
@@ -526,6 +605,15 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
 
             try self.bin_op(b.op, left, right, dest, scope);
         },
+        .unary_op => |u| {
+            const value = try self.getOperandPtr(u.dest, closure, scope);
+
+            switch (u.op) {
+                .Not => value.* = Value.initBool(!if_truthy(value.*)),
+                .Neg => value.* = Value.initNumber(-value.asNumber()),
+                else => return error.TODO,
+            }
+        },
         .new_table => |nt| {
             (try self.getOperandPtr(nt, closure, scope)).* = (try Object.ObjTable.create(self)).object.asValue();
         },
@@ -539,8 +627,11 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
             field.* = try self.getOperand(ta.value, closure, scope);
         },
         .table_set_by_value => |ta| {
+            const field_val = try self.getOperand(ta.field, closure, scope);
+            if (field_val.isNil())
+                return error.NilAccess;
             const table: *Object.ObjTable = (try self.getOperand(ta.table, closure, scope)).asObjectOfType(.Table);
-            const field = try table.fields.getWithKey(try self.getOperand(ta.field, closure, scope));
+            const field = try table.fields.getWithKey(field_val);
             field.* = try self.getOperand(ta.value, closure, scope);
         },
         .get_field_by_str => |ta| {
@@ -676,7 +767,7 @@ pub fn callFunction(self: *@This(), func: Value, scope: *Scope, args: []Value) a
     }
 
     if (!func.isObjectOfType(.Closure))
-        return error.NotAClosure;
+        return self.errorFmt(error.InvalidCaller, "Expected function (closure), got {}", .{func});
 
     const closure: *Object.ObjClosure = func.asObjectOfType(.Closure);
     const new_scope = try self.newScope(scope);
@@ -707,7 +798,7 @@ pub fn callFunction(self: *@This(), func: Value, scope: *Scope, args: []Value) a
     defer self.destroyScope(new_scope);
 
     if (new_scope.return_slot) |return_slot|
-        return return_slot.values[0];
+        return return_slot.object.asValue();
 
     return Value.initNil();
 }

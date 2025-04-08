@@ -141,21 +141,31 @@ pub const ObjTable = struct {
             return value.value_ptr;
         }
 
-        pub fn firstEntry(self: *CustomMap) ?union(enum) { array: Value, str_entry: StringPart.Entry, hash_entry: HashPart.Entry } {
+        pub fn firstEntry(self: *CustomMap, vm: *VM) !?struct { Value, Value } {
             if (self.array_part.items.len > 0)
-                return .{ .array = self.array_part.items[0] };
+                return .{ Value.initNumber(1), self.array_part.items[0] }; // It's lua after all.
 
-            if (self.hash_part.count > 0) {
-                var iter = self.hash_part.iterator();
-                return .{ .entry = iter.next() orelse @panic("Unknown") };
+            if (self.hash_part.count() > 0) o: {
+                return try self.firstObjectEntry() orelse break :o;
             }
 
-            if (self.string_part.count > 0) {
-                var iter = self.string_part.iterator();
-                return .{ .entry = iter.next() orelse @panic("Unknown") };
+            if (self.string_part.count() > 0) {
+                return try self.firstStringEntry(vm);
             }
 
             return null;
+        }
+
+        pub fn firstStringEntry(self: *CustomMap, vm: *VM) !?struct { Value, Value } {
+            var iter = self.string_part.iterator();
+            const entry = iter.next() orelse return null;
+            return .{ (try VM.Object.ObjString.create(vm, entry.key_ptr.*)).object.asValue(), entry.value_ptr.* };
+        }
+
+        pub fn firstObjectEntry(self: *CustomMap) !?struct { Value, Value } {
+            var iter = self.hash_part.iterator();
+            const entry = iter.next() orelse return null;
+            return .{ entry.key_ptr.*, entry.value_ptr.* };
         }
     };
 

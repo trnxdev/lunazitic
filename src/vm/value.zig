@@ -1,4 +1,5 @@
 const std = @import("std");
+const VM = @import("./vm.zig");
 const Object = @import("object.zig");
 
 data: u64,
@@ -97,4 +98,13 @@ pub fn asStringCastNum(self: @This(), allocator: std.mem.Allocator) ![]const u8 
         try std.fmt.allocPrint(allocator, "{d}", .{self.asNumber()})
     else
         return error.CannotCastToString;
+}
+
+pub fn format(
+    self: @This(),
+    comptime _: []const u8,
+    _: std.fmt.FormatOptions,
+    writer: anytype,
+) !void {
+    try VM.tostring_internal(self, writer);
 }

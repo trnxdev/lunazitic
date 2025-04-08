@@ -77,6 +77,10 @@ pub const Instruction = union(enum) {
         table: Operand,
         dest: Operand,
     },
+    unary_op: struct {
+        op: AST.UnaryOp,
+        dest: Operand,
+    },
     unwrap_tuple_save: OperandList,
     unwrap_single_tuple_save: Operand,
 
@@ -392,11 +396,12 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
                 try operands.append(operand);
             }
 
-            const dest = try worker.allocateReg();
-            defer worker.freeReg(dest);
+            try worker.instructions.append(self.allocator, Instruction{
+                .unwrap_tuple_save = try operands.toOwnedSlice(),
+            });
 
             for (vd.Vars, 0..) |variable, i| {
-                const operand = if (i > vd.Vars.len) break else operands.items[i];
+                const operand: Instruction.Operand = .{ .save_or_nil = @intCast(i) };
 
                 switch (variable) {
                     .Name => |n| {
@@ -601,34 +606,69 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
             return;
         },
         .GenericFor => |gf| {
-            if (gf.Exps.len > 1) {
-                return error.TODO;
+            var operands = std.ArrayList(Instruction.Operand).init(self.allocator);
+            defer while (operands.pop()) |op| worker.freeReg(op);
+
+            for (gf.Exps) |exp| {
+                try operands.append(try self.compileExp(exp.*, worker));
             }
 
-            // for i in **counter(5)**
-            const iterator = try self.compileExp(gf.Exps[0].*, worker);
+            // Initter returns (iterator as a function, ?param1, ?param2)
+
+            const iterator = try worker.allocateReg();
             defer worker.freeReg(iterator);
+            const param_1 = try worker.allocateReg();
+            defer worker.freeReg(param_1);
+            const param_2 = try worker.allocateReg();
+            defer worker.freeReg(param_2);
+
+            try worker.instructions.append(self.allocator, Instruction{
+                .unwrap_tuple_save = try operands.toOwnedSlice(),
+            });
+
+            try worker.instructions.append(self.allocator, Instruction{ .copy = .{
+                .src = .{ .save_or_nil = 0 },
+                .dest = iterator,
+            } });
+            try worker.instructions.append(self.allocator, Instruction{ .copy = .{
+                .src = .{ .save_or_nil = 1 },
+                .dest = param_1,
+            } });
+            try worker.instructions.append(self.allocator, Instruction{ .copy = .{
+                .src = .{ .save_or_nil = 2 },
+                .dest = param_2,
+            } });
 
             const begin = worker.instructions.items.len;
 
             const iterator_res = try worker.allocateReg();
             defer worker.freeReg(iterator_res);
 
+            const args = try self.allocator.create(Instruction.OperandList);
+            const vals = try self.allocator.alloc(Instruction.Operand, 2);
+            vals[0] = param_1;
+            vals[1] = param_2;
+
+            args.* = vals;
+
             try worker.instructions.append(self.allocator, Instruction{ .call_func = .{
                 .func = iterator,
-                .args = null,
+                .args = args,
                 .dest = iterator_res,
-            } });
-
-            const to_patch = worker.instructions.items.len;
-
-            try worker.instructions.append(self.allocator, Instruction{ .jump_if_false = .{
-                .state_reg = iterator_res,
-                .target = 0,
             } });
 
             try worker.instructions.append(self.allocator, Instruction{ .unwrap_single_tuple_save = iterator_res });
 
+            const dest = try worker.allocateReg();
+
+            try worker.instructions.append(self.allocator, Instruction{ .bin = .{
+                .lhs = .{ .save_or_nil = 0 },
+                .rhs = try self.fetchNil(worker),
+                .dest = dest,
+                .op = .Eql,
+            } });
+
+            // var_1, ···, var_n => local var_1, ···, var_n = f(s, var)
             for (gf.Names, 0..) |name, i| {
                 if (i >= gf.Names.len) break;
 
@@ -639,12 +679,26 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
                 });
             }
 
+            //  if var_1 == nil then break end
+            const to_patch = worker.instructions.items.len;
+            try worker.instructions.append(self.allocator, Instruction{ .jump_if_true = .{
+                .state_reg = dest,
+                .target = 0,
+            } });
+            worker.freeReg(dest);
+
+            // var = var_1
+            try worker.instructions.append(self.allocator, Instruction{ .copy = .{
+                .src = .{ .save_or_nil = 0 },
+                .dest = param_2,
+            } });
+
             for (gf.Block) |innerstat| {
                 try self.compileStat(innerstat.*, worker);
             }
 
             try worker.instructions.append(self.allocator, Instruction{ .jump = begin });
-            worker.instructions.items[to_patch].jump_if_false.target = worker.instructions.items.len;
+            worker.instructions.items[to_patch].jump_if_true.target = worker.instructions.items.len;
         },
         else => |a| std.debug.panic("TODO {}\n", .{a}),
     }
@@ -786,7 +840,17 @@ pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instru
         .Vararg => {
             return .vararg;
         },
-        else => |a| std.debug.panic("TODO {}", .{a}),
+        .Unary => |u| {
+            const inner = try self.compileExp(u.Right.*, worker);
+            defer worker.freeReg(inner);
+
+            try worker.instructions.append(self.allocator, Instruction{ .unary_op = .{
+                .op = u.Op,
+                .dest = inner,
+            } });
+
+            return inner;
+        },
     };
 }
 
