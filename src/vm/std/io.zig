@@ -2,9 +2,9 @@ const std = @import("std");
 const VM = @import("../vm.zig");
 
 pub fn init(vm: *VM) !VM.Value {
-    const os = try VM.Object.ObjTable.create(vm);
-    try os.fields.putWithKey((try VM.Object.ObjString.create(vm, "write")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &write)).object.asValue());
-    return os.object.asValue();
+    const io = try VM.Object.ObjTable.create(vm);
+    try io.fields.putWithKey((try VM.Object.ObjString.create(vm, "write")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &write)).object.asValue());
+    return io.object.asValue();
 }
 
 // FIXME: Use some default file in the spec

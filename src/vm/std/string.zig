@@ -102,6 +102,13 @@ fn makeSimpleStringFuncOnAllocd(func: fn ([]u8) void) fn (*VM, *VM.Scope, []VM.V
     }.innerfunc;
 }
 
+fn readByteOrNull(reader: anytype) anyerror!?u8 {
+    return reader.readByte() catch |e| switch (e) {
+        error.EndOfStream => null,
+        else => return e,
+    };
+}
+
 pub fn format(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
     if (args.len < 1)
         return error.InvalidArgumentCount;
@@ -109,49 +116,46 @@ pub fn format(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
     const format_string = try args[0].asStringCastNum(vm.allocator);
     defer if (args[0].isNumber()) vm.allocator.free(format_string);
 
+    var format_string_stream = std.io.fixedBufferStream(format_string);
+    const format_string_reader = format_string_stream.reader();
+
     var formatted_string = std.ArrayList(u8).init(vm.allocator);
     defer formatted_string.deinit();
 
     var arg_index: usize = 1;
-    var i: usize = 0;
 
-    while (i < format_string.len) {
-        if (format_string[i] == '%' and i + 1 < format_string.len) {
-            i += 1;
-            if (format_string[i] == '%') {
-                try formatted_string.append('%');
-            } else {
-                if (arg_index >= args.len)
-                    return error.InvalidArgumentCount;
-
-                const arg = args[arg_index];
-                arg_index += 1;
-
-                switch (format_string[i]) {
-                    'd', 'i', 'f', 'u' => {
-                        if (!arg.isNumber())
-                            return error.BadArgument;
-                        try formatted_string.writer().print("{d}", .{arg.asNumber()});
-                    },
-                    inline 'x', 'o', 'X' => |c| {
-                        if (!arg.isNumber())
-                            return error.BadArgument;
-                        const fmt: []const u8 = comptime &.{ '{', c, '}' };
-                        try formatted_string.writer().print(fmt, .{@as(usize, @intFromFloat(arg.asNumber()))});
-                    },
-                    's' => {
-                        const str_arg = try arg.asStringCastNum(vm.allocator);
-                        defer if (arg.isNumber()) vm.allocator.free(str_arg);
-                        try formatted_string.writer().print("{s}", .{str_arg});
-                    },
-                    '%' => try formatted_string.append('%'),
-                    else => |c| std.debug.panic("Bad Argument {c}\n", .{c}),
-                }
-            }
-        } else {
-            try formatted_string.append(format_string[i]);
+    while (try readByteOrNull(&format_string_reader)) |c| {
+        if (c != '%') {
+            try formatted_string.append(c);
+            continue;
         }
-        i += 1;
+
+        if (arg_index >= args.len)
+            return error.InvalidArgumentCount;
+
+        const arg = args[arg_index];
+        arg_index += 1;
+
+        switch ((try readByteOrNull(&format_string_reader)) orelse return error.InvalidOptionToFormat) {
+            'd', 'i', 'f', 'u' => {
+                if (!arg.isNumber())
+                    return error.BadArgument;
+                try formatted_string.writer().print("{d}", .{arg.asNumber()});
+            },
+            inline 'x', 'o', 'X' => |x| {
+                if (!arg.isNumber())
+                    return error.BadArgument;
+                const fmt: []const u8 = comptime &.{ '{', x, '}' };
+                try formatted_string.writer().print(fmt, .{@as(usize, @intFromFloat(arg.asNumber()))});
+            },
+            's' => {
+                const str_arg = try arg.asStringCastNum(vm.allocator);
+                defer if (arg.isNumber()) vm.allocator.free(str_arg);
+                try formatted_string.writer().print("{s}", .{str_arg});
+            },
+            '%' => try formatted_string.append('%'),
+            else => return vm.errorFmt(error.BadArgument, "Bad Argument {c}\n", .{c}),
+        }
     }
 
     return (try VM.Object.ObjString.createMoved(vm, try formatted_string.toOwnedSlice())).object.asValue();

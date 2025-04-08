@@ -120,6 +120,11 @@ pub fn deinit(self: *@This()) void {
     self.allocator.free(self.metatables_for_primitives);
 }
 
+pub fn errorFmt(_: *@This(), err: anyerror, comptime log_fmt: []const u8, log_args: anytype) anyerror {
+    std.log.err("Lunazitic VM: " ++ log_fmt, log_args);
+    return err;
+}
+
 pub fn allocateObject(self: *@This()) !*Object.ObjObject {
     const ptr = try self.allocator.create(Object.ObjObject);
     try self.values.append(self.allocator, ptr);
