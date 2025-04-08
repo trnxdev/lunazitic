@@ -121,7 +121,7 @@ pub fn deinit(self: *@This()) void {
 }
 
 pub fn errorFmt(_: *@This(), err: anyerror, comptime log_fmt: []const u8, log_args: anytype) anyerror {
-    std.log.err("Lunazitc VM: " ++ log_fmt, log_args);
+    std.log.err("Lunazitic VM: " ++ log_fmt, log_args);
     return err;
 }
 
