@@ -205,8 +205,7 @@ local function toOctet(char)
 end
 
 local function base64_encode(input)
-    local bytes = { input:byte(i, #input) }
-
+    local bytes = { input:byte(1, #input) }
     local out = {}
 
     -- Go through each triplet of 3 bytes, which produce 4 octets.

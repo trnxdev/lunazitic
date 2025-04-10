@@ -260,6 +260,10 @@ pub fn init(allocator: std.mem.Allocator) @This() {
     };
 }
 
+pub fn deinit(self: *@This()) void {
+    _ = self;
+}
+
 pub fn getGlobalSymbol(self: *@This(), symbol: []const u8) !?Instruction.Symbol {
     for (self.global_symbol_map.items) |item| {
         if (std.mem.eql(u8, item.k, symbol))

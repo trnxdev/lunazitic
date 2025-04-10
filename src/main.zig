@@ -33,7 +33,15 @@ fn DeeperFmt(comptime T: type) type {
     };
 }
 
-pub fn main() !void {
+fn usage() void {
+    std.io.getStdOut().writer().print(
+        \\Usage: `lunazitic run <file>`
+        \\For more help, run `lunazitic help`
+        \\
+    , .{}) catch @panic("Stdout not available.");
+}
+
+pub fn main() !u8 {
     const program_start = std.time.milliTimestamp();
 
     var gpa = if (InDebug) std.heap.GeneralPurposeAllocator(.{}){} else void{};
@@ -43,86 +51,123 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    const path = args[1];
+    std.debug.assert(args.len >= 1);
 
-    // Absolute paths also work `fs.cwd().readFileAlloc`
-    const file_content = try std.fs.cwd().readFileAlloc(
-        allocator,
-        path,
-        MaxUsize,
-    );
-    defer allocator.free(file_content);
+    if (args.len < 2) {
+        usage();
+        return 0;
+    }
 
-    var token_stream = TokenStream{
-        .buffer = file_content,
-        .location = .{},
-        .allocator = allocator,
-        // TODO: again. token stream should not need the arena allocator
-        // so we do this temporary thing to use parser's arena stuff
+    const Command = enum {
+        run,
+        help,
     };
+    const command = std.meta.stringToEnum(Command, args[1]) orelse {
+        std.log.err("Unkown command {s}", .{args[1]});
+        usage();
+        return 1;
+    };
+    switch (command) {
+        Command.run => {
+            if (args.len < 3) {
+                std.log.err("No file given", .{});
+                usage();
+                return 1;
+            }
 
-    var tokens = std.ArrayList(Token).init(allocator);
-    defer tokens.deinit();
+            const path = args[2];
 
-    var parser = Parser.init(allocator, &token_stream);
-    defer parser.deinit();
+            const file_content = std.fs.cwd().readFileAlloc(
+                allocator,
+                path,
+                MaxUsize,
+            ) catch |e| switch (e) {
+                error.FileNotFound => {
+                    std.log.err("File not found: {s}", .{path});
+                    return 1;
+                },
+                else => return e,
+            };
+            defer allocator.free(file_content);
 
-    // SHOULD NOT BE THERE
-    token_stream.allocator = parser.arena_allocator();
+            var token_stream = TokenStream{
+                .buffer = file_content,
+                .location = .{},
+                .allocator = allocator,
+                // TODO: again. token stream should not need the arena allocator
+                // so we do this temporary thing to use parser's arena stuff
+            };
 
-    const root = try parser.parseRoot();
-    const ast_file = try std.fs.cwd().createFile("lunazitic_ast.txt", .{});
+            var tokens = std.ArrayList(Token).init(allocator);
+            defer tokens.deinit();
 
-    for (root) |stat| {
-        try ast_file.writer().print("{any}\n", .{deeperFmt(stat, 100)});
-    }
+            var parser = Parser.init(allocator, &token_stream);
+            defer parser.deinit();
 
-    ast_file.close();
+            // SHOULD NOT BE THERE
+            token_stream.allocator = parser.arena_allocator();
 
-    var compiler = Compiler.init(parser.arena_allocator());
-    // defer compiler.deinit();
+            const root = try parser.parseRoot();
+            const ast_file = try std.fs.cwd().createFile("lunazitic_ast.txt", .{});
 
-    const root_closure = try compiler.compileRoot(root);
+            for (root) |stat| {
+                try ast_file.writer().print("{any}\n", .{deeperFmt(stat, 100)});
+            }
 
-    const bytecode_file = try std.fs.cwd().createFile("lunazitic_bytecode.txt", .{});
-    for (root_closure.func.instructions) |vd| {
-        try bytecode_file.writer().print("{any}\n", .{deeperFmt(vd, 100)});
-    }
+            ast_file.close();
 
-    try bytecode_file.writer().print("\n\n\n", .{});
+            var compiler = Compiler.init(parser.arena_allocator());
+            defer compiler.deinit();
 
-    for (root_closure.func.constants) |constant| {
-        try bytecode_file.writer().print("{any}\n", .{deeperFmt(constant, 100)});
+            const root_closure = try compiler.compileRoot(root);
 
-        if (constant.isObjectOfType(.Function)) {
-            const func = constant.asObjectOfType(.Function);
-            for (func.instructions) |vd| {
+            const bytecode_file = try std.fs.cwd().createFile("lunazitic_bytecode.txt", .{});
+            for (root_closure.func.instructions) |vd| {
                 try bytecode_file.writer().print("{any}\n", .{deeperFmt(vd, 100)});
             }
-        }
+
+            try bytecode_file.writer().print("\n\n\n", .{});
+
+            for (root_closure.func.constants) |constant| {
+                try bytecode_file.writer().print("{any}\n", .{deeperFmt(constant, 100)});
+
+                if (constant.isObjectOfType(.Function)) {
+                    const func = constant.asObjectOfType(.Function);
+                    for (func.instructions) |vd| {
+                        try bytecode_file.writer().print("{any}\n", .{deeperFmt(vd, 100)});
+                    }
+                }
+            }
+
+            bytecode_file.close();
+
+            const vm = try VM.init(parser.arena_allocator(), program_start);
+            defer vm.deinit();
+
+            vm.global_symbol_map = compiler.global_symbol_map.items;
+
+            const scope: *VM.Scope = &vm.scopes[0];
+            scope.* = .{};
+
+            const start = std.time.milliTimestamp();
+            try vm.runClosure(root_closure, scope);
+            const end = std.time.milliTimestamp();
+
+            std.debug.print("Took: {}ms\n", .{end - start});
+
+            const vm_usage_file = try std.fs.cwd().createFile("lunazitic_vm_usage.txt", .{});
+            defer vm_usage_file.close();
+
+            for (vm.tags_ran[0..], 0..) |ran, i| {
+                try vm_usage_file.writer().print("{s}:\t{d}\n", .{ @tagName(@as(std.meta.Tag(Compiler.Instruction), @enumFromInt(i))), ran });
+            }
+        },
+        Command.help => {
+            std.debug.print("Help is in TODO, here's usage tho!\n", .{});
+            usage();
+            return 0;
+        },
     }
 
-    bytecode_file.close();
-
-    const vm = try VM.init(parser.arena_allocator(), program_start);
-    defer vm.deinit();
-
-    vm.global_symbol_map = compiler.global_symbol_map.items;
-
-    const scope: *VM.Scope = &vm.scopes[0];
-    scope.* = .{};
-
-    const start = std.time.milliTimestamp();
-    try vm.runClosure(root_closure, scope);
-    const end = std.time.milliTimestamp();
-
-    std.debug.print("Took: {}ms\n", .{end - start});
-
-    const vm_usage_file = try std.fs.cwd().createFile("lunazitic_vm_usage.txt", .{});
-
-    for (vm.tags_ran[0..], 0..) |ran, i| {
-        try vm_usage_file.writer().print("{s}:\t{d}\n", .{ @tagName(@as(std.meta.Tag(Compiler.Instruction), @enumFromInt(i))), ran });
-    }
-
-    vm_usage_file.close();
+    return 0;
 }
