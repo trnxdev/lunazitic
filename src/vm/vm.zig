@@ -6,6 +6,7 @@ const std_math = @import("./std/math.zig");
 const std_os = @import("./std/os.zig");
 const std_io = @import("./std/io.zig");
 const std_string = @import("./std/string.zig");
+const std_table = @import("./std/table.zig");
 const Parser = @import("../parser.zig");
 const Compiler = @import("compiler.zig");
 
@@ -16,6 +17,7 @@ internals: struct {
     magic_number_1: usize = 0,
     magic_number_0: usize = 0,
     reference_to_next: *Object.ObjNativeFunction,
+    reference_to_inner_ipairs: *Object.ObjNativeFunction,
     program_start: i64, // milliseconds
     rng: std.Random.Xoshiro256,
 },
@@ -70,6 +72,7 @@ pub fn init(
             .program_start = program_start,
             .rng = std.Random.Xoshiro256.init(0),
             .reference_to_next = undefined,
+            .reference_to_inner_ipairs = undefined,
         },
         .global_vars = try Object.ObjTable.createIndependant(allocator),
         .allocator = allocator,
@@ -77,6 +80,7 @@ pub fn init(
         .values = .{},
     };
     vm.internals.reference_to_next = try Object.ObjNativeFunction.create(vm, &next);
+    vm.internals.reference_to_inner_ipairs = try Object.ObjNativeFunction.create(vm, &inner_ipairs);
     vm.metatables_for_primitives = try allocator.alloc(*Object.ObjTable, 4);
     for (vm.metatables_for_primitives) |*mpt| mpt.* = try Object.ObjTable.createIndependant(vm.allocator);
 
@@ -85,6 +89,7 @@ pub fn init(
     try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "assert")).object.asValue(), (try Object.ObjNativeFunction.create(vm, &assert)).object.asValue());
     try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "next")).object.asValue(), (try Object.ObjNativeFunction.create(vm, &next)).object.asValue());
     try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "pairs")).object.asValue(), (try Object.ObjNativeFunction.create(vm, &pairs)).object.asValue());
+    try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "ipairs")).object.asValue(), (try Object.ObjNativeFunction.create(vm, &ipairs)).object.asValue());
     try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "_G")).object.asValue(), vm.global_vars.object.asValue());
     try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "_VERSION")).object.asValue(), (try Object.ObjString.create(vm, "Lua 5.1")).object.asValue());
 
@@ -92,6 +97,10 @@ pub fn init(
     const string_table = vm.metatables_for_primitives[@intFromEnum(MpType.String)];
     string_table.* = ((try std_string.init(vm)).asObjectOfType(.Table)).*;
     try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "string")).object.asValue(), string_table.*.object.asValue());
+
+    // Table STD
+    const table = try std_table.init(vm);
+    try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "table")).object.asValue(), table);
 
     // Math STD
     const math = try std_math.init(vm);
@@ -101,7 +110,7 @@ pub fn init(
     const os = try std_os.init(vm);
     try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "os")).object.asValue(), os);
 
-    // OS STD
+    // IO STD
     const io = try std_io.init(vm);
     try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "io")).object.asValue(), io);
 
@@ -144,6 +153,54 @@ pub fn pairs(vm: *VM, _: *Scope, args: []Value) anyerror!Value {
     return_vals[0] = vm.internals.reference_to_next.object.asValue();
     return_vals[1] = args[0];
     return_vals[2] = Value.initNil();
+
+    return (try Object.ObjTuple.createMoved(vm, return_vals)).object.asValue();
+}
+
+pub fn ipairs(vm: *VM, _: *Scope, args: []Value) anyerror!Value {
+    if (args.len < 1)
+        return error.InvalidArgumentCount;
+
+    if (!args[0].isObjectOfType(.Table))
+        return error.BadArgument;
+
+    const return_vals = try vm.allocator.alloc(Value, 3);
+
+    return_vals[0] = vm.internals.reference_to_inner_ipairs.object.asValue();
+    return_vals[1] = args[0];
+    return_vals[2] = Value.initNumber(0);
+
+    return (try Object.ObjTuple.createMoved(vm, return_vals)).object.asValue();
+}
+
+pub fn inner_ipairs(vm: *VM, _: *Scope, args: []Value) anyerror!Value {
+    if (args.len < 2)
+        return error.InvalidArgumentCount;
+
+    if (!args[0].isObjectOfType(.Table))
+        return error.BadArgument;
+
+    if (!args[1].isNumber())
+        return error.BadArgument;
+
+    const table: *Object.ObjTable = args[0].asObjectOfType(.Table);
+    const index: usize = @intFromFloat(args[1].asNumber());
+
+    const new_index: usize = index + 1;
+    std.debug.assert(Object.ObjTable.number_belongs_in_array_part(@floatFromInt(new_index)));
+
+    if (new_index > table.fields.array_part.items.len)
+        return Value.initNil();
+
+    const field = table.fields.array_part.items[new_index -| 1];
+
+    if (field.isNil())
+        return Value.initNil();
+
+    const return_vals = try vm.allocator.alloc(Value, 2);
+
+    return_vals[0] = Value.initNumber(@floatFromInt(new_index));
+    return_vals[1] = field;
 
     return (try Object.ObjTuple.createMoved(vm, return_vals)).object.asValue();
 }
@@ -196,9 +253,18 @@ pub fn next(vm: *VM, _: *Scope, args: []Value) anyerror!Value {
                 break :i;
             }
 
-            const next_key: usize = @intFromFloat(given_key_num + 1);
+            var next_key: usize = @intFromFloat(given_key_num + 1);
 
-            if (next_key > table.fields.array_part.items.len) {
+            u: {
+                z: while (table.fields.array_part.items.len >= next_key) {
+                    if (table.fields.array_part.items[next_key -| 1].isNil()) {
+                        next_key += 1;
+                        continue :z;
+                    }
+
+                    break :u;
+                }
+
                 previous_maxxed = true;
                 break :i;
             }
@@ -395,6 +461,7 @@ pub fn newScopeInherit(self: *@This(), scope: *Scope) !*Scope {
 pub fn destroyScope(self: *@This(), scope: *Scope) void {
     scope.pc = 0;
     scope.exit = .None;
+    scope.return_slot = null;
 
     // if (scope.return_slot) |rs| {
     //    rs.deinit(self.allocator);
@@ -606,16 +673,31 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
             try self.bin_op(b.op, left, right, dest, scope);
         },
         .unary_op => |u| {
-            const value = try self.getOperandPtr(u.dest, closure, scope);
+            const value = try self.getOperand(u.src, closure, scope);
+            const dest = try self.getOperandPtr(u.dest, closure, scope);
 
             switch (u.op) {
-                .Not => value.* = Value.initBool(!if_truthy(value.*)),
-                .Neg => value.* = Value.initNumber(-value.asNumber()),
-                else => return error.TODO,
+                .Not => dest.* = Value.initBool(!if_truthy(value)),
+                .Neg => dest.* = Value.initNumber(-value.asNumber()),
+                .Len => {
+                    if (value.isObjectOfType(.String)) {
+                        dest.* = Value.initNumber(@floatFromInt(value.asObjectOfType(.String).value.len));
+                    } else if (value.isObjectOfType(.Table)) {
+                        const fields = value.asObjectOfType(.Table).fields;
+                        dest.* = Value.initNumber(@floatFromInt(fields.len()));
+                    } else {
+                        return error.BadArgument;
+                    }
+                },
             }
         },
         .new_table => |nt| {
             (try self.getOperandPtr(nt, closure, scope)).* = (try Object.ObjTable.create(self)).object.asValue();
+        },
+        .table_append_save_after => |tsa| {
+            const table: *Object.ObjTable = (try self.getOperand(tsa.table, closure, scope)).asObjectOfType(.Table);
+            for (self.save[tsa.after..]) |val|
+                try table.fields.putNoKey(val);
         },
         .table_append => |ta| {
             const table: *Object.ObjTable = (try self.getOperand(ta.table, closure, scope)).asObjectOfType(.Table);
@@ -733,7 +815,13 @@ pub fn extractTuples(self: *@This(), args: []const Value, max: usize) ![]Value {
                 if (i + j >= max)
                     break;
 
-                extracted[i + j] = tupl;
+                var val = tupl;
+
+                // TODO: A better way to fix this shit.
+                if (tupl.isObjectOfType(.Tuple))
+                    val = (try self.extractTuples(&.{tupl}, max))[0];
+
+                extracted[i + j] = val;
             }
 
             wrote_before = wrote + 1;
@@ -775,7 +863,7 @@ pub fn callFunction(self: *@This(), func: Value, scope: *Scope, args: []Value) a
     for (0..closure.func.params.len) |i| {
         if (args[i].isObjectOfType(.Tuple)) {
             for (i..closure.func.params.len, 0..) |j, z| {
-                if (z > args[i].asObjectOfType(.Tuple).values.len)
+                if (z >= args[i].asObjectOfType(.Tuple).values.len)
                     break;
 
                 new_scope.locals[j] = args[i].asObjectOfType(.Tuple).values[z];
@@ -797,8 +885,9 @@ pub fn callFunction(self: *@This(), func: Value, scope: *Scope, args: []Value) a
     try self.runClosure(closure, new_scope);
     defer self.destroyScope(new_scope);
 
-    if (new_scope.return_slot) |return_slot|
-        return return_slot.object.asValue();
+    if (new_scope.return_slot) |rs| {
+        return rs.object.asValue();
+    }
 
     return Value.initNil();
 }

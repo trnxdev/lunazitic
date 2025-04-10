@@ -91,8 +91,18 @@ pub const ObjTable = struct {
                 if (!number_belongs_in_array_part(index))
                     break :o;
 
-                if (@as(usize, @intFromFloat(index)) <= self.array_part.items.len)
-                    return &self.array_part.items[@intFromFloat(index - 1)]; // Lua, please.
+                if (@as(usize, @intFromFloat(index)) > self.array_part.items.len) {
+                    // make sure to resize to the right size
+                    const old_size = self.array_part.items.len;
+                    const new_size = @as(usize, @intFromFloat(index));
+                    try self.array_part.resize(new_size);
+
+                    for (old_size..new_size) |idx| {
+                        self.array_part.items[idx] = VM.Value.initNil();
+                    }
+                }
+
+                return &self.array_part.items[@intFromFloat(index - 1)]; // Lua, please.
             }
 
             if (key.isObjectOfType(.String))
@@ -142,8 +152,9 @@ pub const ObjTable = struct {
         }
 
         pub fn firstEntry(self: *CustomMap, vm: *VM) !?struct { Value, Value } {
-            if (self.array_part.items.len > 0)
-                return .{ Value.initNumber(1), self.array_part.items[0] }; // It's lua after all.
+            if (self.array_part.items.len > 0) o: {
+                return try self.firstArrayEntry() orelse break :o;
+            }
 
             if (self.hash_part.count() > 0) o: {
                 return try self.firstObjectEntry() orelse break :o;
@@ -151,6 +162,21 @@ pub const ObjTable = struct {
 
             if (self.string_part.count() > 0) {
                 return try self.firstStringEntry(vm);
+            }
+
+            return null;
+        }
+
+        pub fn firstArrayEntry(self: *CustomMap) !?struct { Value, Value } {
+            if (self.array_part.items.len == 0)
+                return null;
+
+            // find first non-nil value
+            for (self.array_part.items, 0..) |value, idx| {
+                if (value.isNil())
+                    continue;
+
+                return .{ Value.initNumber(@floatFromInt(idx + 1)), value };
             }
 
             return null;
@@ -166,6 +192,10 @@ pub const ObjTable = struct {
             var iter = self.hash_part.iterator();
             const entry = iter.next() orelse return null;
             return .{ entry.key_ptr.*, entry.value_ptr.* };
+        }
+
+        pub fn len(self: CustomMap) usize {
+            return self.array_part.items.len + self.hash_part.count() + self.string_part.count();
         }
     };
 

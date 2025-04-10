@@ -711,10 +711,14 @@ pub fn parseUnary(self: *@This()) anyerror!*AST.Exp {
         const inner = try self.power();
 
         while (unary_ops.pop()) |unop| {
-            inner.* = .{ .Unary = .{
-                .Op = unop,
-                .Right = try inner.clone(self.arena_allocator()),
-            } };
+            const prev_outer = try self.arena_allocator().create(AST.Exp);
+            prev_outer.* = inner.*;
+            inner.* = .{
+                .Unary = .{
+                    .Op = unop,
+                    .Right = prev_outer,
+                },
+            };
         }
 
         return inner;

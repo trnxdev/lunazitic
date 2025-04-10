@@ -13,30 +13,27 @@ pub fn init(vm: *VM) !VM.Value {
     return string.object.asValue();
 }
 
-pub fn byte(_: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
+// string.byte (s [, i [, j]])
+//Returns the internal numerical codes of the characters s[i], s[i+1], ···, s[j]. The default value for i is 1; the default value for j is i.
+// Note that numerical codes are not necessarily portable across platforms.
+pub fn byte(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
     if (args.len < 1)
         return error.InvalidArgumentCount;
 
-    if (!args[0].isNumber() and !args[0].isObjectOfType(.String))
-        return error.BadArgument;
+    const str = try args[0].asStringCastNum(vm.allocator);
+    defer if (args[0].isNumber()) vm.allocator.free(str);
 
-    // 48 = '0' in ascii table
-    // TODO: Is this faster than using asStringCastNum? Is it even worth it?
-    // Are pancakes better than waffles?
-    if (args[0].isNumber())
-        return if (args[0].asNumber() < 0)
-            VM.Value.initNumber('-')
-        else
-            VM.Value.initNumber(args[0].asNumber() + 48);
+    const i: f64 = if (args.len > 1 and args[1].isNumber()) args[1].asNumber() else @floatFromInt(1);
+    const j: f64 = if (args.len > 2) args[2].asNumber() else i;
 
-    const string = args[0].asObjectOfType(.String).value;
+    const char_codes_ret = try vm.allocator.alloc(VM.Value, @intFromFloat(j - (i - 1)));
 
-    // TODO: Lua 5.1 returns nothing, and when you try to get length of it, it panics.
-    // Let's keep it nil.
-    if (string.len == 0)
-        return VM.Value.initNil();
+    for (@intFromFloat(i - 1)..@intFromFloat(j), 0..) |index, idx| {
+        const char_code = str[index];
+        char_codes_ret[idx] = VM.Value.initNumber(@floatFromInt(char_code));
+    }
 
-    return VM.Value.initNumber(@floatFromInt(string[0]));
+    return (try VM.Object.ObjTuple.createMoved(vm, char_codes_ret)).object.asValue();
 }
 
 // Returns the substring of s that starts at i and continues until j; i and j can be negative.

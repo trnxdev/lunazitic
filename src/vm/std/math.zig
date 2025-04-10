@@ -24,6 +24,7 @@ pub fn init(vm: *VM) !VM.Value {
     try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "log10")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &log10)).object.asValue());
     try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "max")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &max)).object.asValue());
     try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "min")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &min)).object.asValue());
+    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "modf")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &modf)).object.asValue());
     try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "pow")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &pow)).object.asValue());
     try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "rad")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &rad)).object.asValue());
     try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "random")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &random)).object.asValue());
@@ -35,6 +36,9 @@ pub fn init(vm: *VM) !VM.Value {
     try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "tanh")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &tanh)).object.asValue());
     try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "huge")).object.asValue(), VM.Value.initNumber(huge));
     try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "pi")).object.asValue(), VM.Value.initNumber(pi));
+
+    // Function math.mod was renamed math.fmod. (See compile-time option LUA_COMPAT_MOD in luaconf.h.)
+    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "mod")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &fmod)).object.asValue());
     return math.object.asValue();
 }
 
@@ -133,6 +137,23 @@ pub const min = makeSimpleMathFuncInfArgs(struct { pub fn min(nums: []const f64)
 
         return min_number;
 } }.min);
+// zig fmt: on
+// math.modf (x) - Returns two numbers, the integral part of x and the fractional part of x.
+pub fn modf(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
+    if (args.len < 1)
+        return error.InvalidArgumentCount;
+
+    const num = try args[0].asNumberCast(.{
+        .string = true,
+    });
+
+    const modf_res = std.math.modf(num);
+    return (try VM.Object.ObjTuple.createOwned(vm, &[_]VM.Value{
+        VM.Value.initNumber(modf_res.ipart),
+        VM.Value.initNumber(modf_res.fpart),
+    })).object.asValue();
+}
+// zig fmt: off
 pub const pow = makeSimpleMathFunc2Args(struct { pub fn pow(num: f64, num2: f64) f64 {
         return std.math.pow(f64, num, num2); // math.pow (x, y) - Returns x^y.
 } }.pow);

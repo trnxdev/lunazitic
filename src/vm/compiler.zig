@@ -57,6 +57,10 @@ pub const Instruction = union(enum) {
         table: Operand,
         value: Operand,
     },
+    table_append_save_after: struct {
+        table: Operand,
+        after: u8,
+    },
     table_set_by_str: struct {
         table: Operand,
         field: []const u8,
@@ -78,6 +82,7 @@ pub const Instruction = union(enum) {
         dest: Operand,
     },
     unary_op: struct {
+        src: Operand,
         op: AST.UnaryOp,
         dest: Operand,
     },
@@ -344,8 +349,6 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
     switch (stat) {
         .FunctionCall => |fc| _ = try self.funcCall(fc.*, worker, false),
         .NumericFor => |nf| {
-            const name_data = try worker.getOrCreateLocalData(nf.Name, false);
-
             const start_b = try self.compileExp(nf.Start.*, worker);
             defer worker.freeReg(start_b);
             const step_b = if (nf.Step) |step| try self.compileExp(step.*, worker) else try self.fetchNumber(1, worker);
@@ -358,6 +361,8 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
             const end = try self.copyConstToLocal(end_b, worker);
 
             const to_patch = worker.instructions.items.len;
+            const name_data = try worker.getOrCreateLocalData(nf.Name, false);
+
             try worker.instructions.append(self.allocator, Instruction{
                 .numeric_for_start = .{
                     .loop_pos = 0,
@@ -759,7 +764,9 @@ pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instru
 
             const dest = try worker.allocateReg();
 
-            // TODO: or should also use short-cut evalutiaonsfaifjasjfsa
+            // And and Or use short-cut evaluation, which
+            // may not evaluate the right-hand side and
+            // spend less time or not error out
             if (b.Op == .And) {
                 try worker.instructions.append(self.allocator, Instruction{ .copy = .{
                     .src = lhs,
@@ -781,6 +788,34 @@ pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instru
 
                 worker.instructions.items[to_patch].jump_if_false.target = worker.instructions.items.len;
 
+                return dest;
+            }
+
+            if (b.Op == .Or) {
+                const to_patch = worker.instructions.items.len;
+                try worker.instructions.append(self.allocator, Instruction{ .jump_if_true = .{
+                    .state_reg = lhs,
+                    .target = 0,
+                } });
+
+                const rhs = try self.compileExp(b.Right.*, worker);
+                defer worker.freeReg(rhs);
+
+                try worker.instructions.append(self.allocator, Instruction{ .copy = .{
+                    .src = rhs,
+                    .dest = dest,
+                } });
+
+                const to_patch2 = worker.instructions.items.len;
+                try worker.instructions.append(self.allocator, Instruction{ .jump = 0 });
+
+                worker.instructions.items[to_patch].jump_if_true.target = worker.instructions.items.len;
+                try worker.instructions.append(self.allocator, Instruction{ .copy = .{
+                    .src = lhs,
+                    .dest = dest,
+                } });
+
+                worker.instructions.items[to_patch2].jump = worker.instructions.items.len;
                 return dest;
             }
 
@@ -831,8 +866,57 @@ pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instru
         .TableConstructor => |tc| {
             const table_reg = try self.startTable(worker);
 
-            for (tc) |field| {
-                try self.putIntoTable(table_reg, field, worker);
+            var ops = std.ArrayList(Instruction.Operand).init(self.allocator);
+            defer ops.deinit();
+
+            for (tc) |iexp| {
+                switch (iexp) {
+                    .Exp => |e| try ops.append(try self.compileExp(e.*, worker)),
+                    .Name => |n| try ops.append(try self.compileExp(n.Exp.*, worker)),
+                    .Index => |i| try ops.append(try self.compileExp(i.Exp.*, worker)),
+                }
+            }
+
+            const final_ops = try ops.toOwnedSlice();
+            for (final_ops) |op| worker.freeReg(op);
+
+            try worker.instructions.append(self.allocator, Instruction{
+                .unwrap_tuple_save = final_ops,
+            });
+
+            for (tc, 0..) |field, idx| {
+                switch (field) {
+                    .Exp => {
+                        if (idx + 1 == tc.len) {
+                            try worker.instructions.append(self.allocator, Instruction{
+                                .table_append_save_after = .{ .table = table_reg, .after = @intCast(idx) },
+                            });
+                        } else {
+                            try worker.instructions.append(self.allocator, Instruction{
+                                .table_append = .{
+                                    .table = table_reg,
+                                    .value = .{ .save_or_nil = @intCast(idx) },
+                                },
+                            });
+                        }
+                    },
+                    .Name => |name| {
+                        try worker.instructions.append(self.allocator, Instruction{ .table_set_by_str = .{
+                            .table = table_reg,
+                            .field = name.Name,
+                            .value = .{ .save_or_nil = @intCast(idx) },
+                        } });
+                    },
+                    .Index => |index| {
+                        const table_index = try self.compileExp(index.Index.*, worker);
+
+                        try worker.instructions.append(self.allocator, Instruction{ .table_set_by_value = .{
+                            .table = table_reg,
+                            .field = table_index,
+                            .value = .{ .save_or_nil = @intCast(idx) },
+                        } });
+                    },
+                }
             }
 
             return table_reg;
@@ -844,12 +928,15 @@ pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instru
             const inner = try self.compileExp(u.Right.*, worker);
             defer worker.freeReg(inner);
 
+            const dest = try worker.allocateReg();
+
             try worker.instructions.append(self.allocator, Instruction{ .unary_op = .{
                 .op = u.Op,
-                .dest = inner,
+                .src = inner,
+                .dest = dest,
             } });
 
-            return inner;
+            return dest;
         },
     };
 }
@@ -986,41 +1073,6 @@ pub fn funcCall(self: *@This(), fc: AST.FunctionCall, worker: *Worker, comptime 
     } });
 
     return if (need_output) dest else null;
-}
-
-pub fn putIntoTable(self: *@This(), table_reg: Instruction.Operand, field: AST.Field, worker: *Worker) !void {
-    switch (field) {
-        .Exp => |innerexp| {
-            const exp_reg = try self.compileExp(innerexp.*, worker);
-            defer worker.freeReg(exp_reg);
-
-            try worker.instructions.append(self.allocator, Instruction{
-                .table_append = .{
-                    .table = table_reg,
-                    .value = exp_reg,
-                },
-            });
-        },
-        .Name => |name| {
-            const exp_result = try self.compileExp(name.Exp.*, worker);
-
-            try worker.instructions.append(self.allocator, Instruction{ .table_set_by_str = .{
-                .table = table_reg,
-                .field = name.Name,
-                .value = exp_result,
-            } });
-        },
-        .Index => |index| {
-            const table_index = try self.compileExp(index.Index.*, worker);
-            const table_exp = try self.compileExp(index.Exp.*, worker);
-
-            try worker.instructions.append(self.allocator, Instruction{ .table_set_by_value = .{
-                .table = table_reg,
-                .field = table_index,
-                .value = table_exp,
-            } });
-        },
-    }
 }
 
 pub fn addUpvalue(self: *@This(), worker: *Worker, symbol: Instruction.Symbol, is_local: bool) !Instruction.Symbol {
