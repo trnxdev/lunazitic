@@ -41,6 +41,18 @@ fn usage() void {
     , .{}) catch @panic("Stdout not available.");
 }
 
+fn help() void {
+    std.io.getStdOut().writer().print(
+        \\Lunazitic - Lua 5.1 impl. in Zig
+        \\
+        \\Options:
+        \\  run <file>: Runs a file
+        \\  version: Prints the version
+        \\  help: Guess what?
+        \\
+    , .{}) catch @panic("Stdout not available.");
+}
+
 pub fn main() !u8 {
     const program_start = std.time.milliTimestamp();
 
@@ -61,6 +73,7 @@ pub fn main() !u8 {
     const Command = enum {
         run,
         help,
+        version,
     };
     const command = std.meta.stringToEnum(Command, args[1]) orelse {
         std.log.err("Unkown command {s}", .{args[1]});
@@ -163,8 +176,11 @@ pub fn main() !u8 {
             }
         },
         Command.help => {
-            std.debug.print("Help is in TODO, here's usage tho!\n", .{});
-            usage();
+            help();
+            return 0;
+        },
+        Command.version => {
+            std.io.getStdOut().writer().writeAll(@embedFile("version.txt") ++ "\n") catch @panic("Stdout not available.");
             return 0;
         },
     }
