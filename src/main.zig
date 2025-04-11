@@ -1,7 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Compiler = @import("./vm/compiler.zig");
-const jdz = @import("jdz_allocator");
+const jdz = @import("jdz");
+const build_options = @import("build_options");
 
 const Token = @import("token.zig");
 const TokenStream = @import("token_stream.zig");
@@ -11,7 +12,7 @@ const VM = @import("./vm/vm.zig");
 const Object = @import("./vm/object.zig");
 const AST = @import("ast.zig");
 
-pub const InDebug = true;
+pub const UseGPA = build_options.@"use-gpa";
 const MaxUsize = std.math.maxInt(usize);
 
 pub fn deeperFmt(value: anytype, max_depth: usize) DeeperFmt(@TypeOf(value)) {
@@ -56,9 +57,9 @@ fn help() void {
 pub fn main() !u8 {
     const program_start = std.time.milliTimestamp();
 
-    var gpa = if (InDebug) std.heap.GeneralPurposeAllocator(.{}){} else void{};
-    const allocator = if (InDebug) gpa.allocator() else jdz;
-    defer _ = if (InDebug) gpa.deinit() else void{};
+    var gpa = if (UseGPA) std.heap.GeneralPurposeAllocator(.{}){} else jdz.JdzAllocator(.{}).init();
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
 
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
@@ -154,7 +155,7 @@ pub fn main() !u8 {
 
             bytecode_file.close();
 
-            const vm = try VM.init(parser.arena_allocator(), program_start);
+            const vm = try VM.init(allocator, program_start);
             defer vm.deinit();
 
             vm.global_symbol_map = compiler.global_symbol_map.items;

@@ -3,6 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const use_gpa = b.option(bool, "use-gpa", "Use the General Purpose Allocator") orelse (optimize == .Debug);
 
     const exe = b.addExecutable(.{
         .name = "smollscript",
@@ -12,10 +13,14 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
-    if (optimize != .Debug) {
-        const jdz_dep = b.dependency("jdz_allocator", .{});
-        exe.root_module.addImport("jdz_allocator", jdz_dep.module("jdz_allocator"));
-    }
+    const options = b.addOptions();
+    options.addOption(bool, "use-gpa", use_gpa);
+    exe.root_module.addOptions("build_options", options);
+
+    //    if (optimize != .Debug) {
+    const jdz_dep = b.dependency("jdz", .{});
+    exe.root_module.addImport("jdz", jdz_dep.module("jdz_allocator"));
+    //  }
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());

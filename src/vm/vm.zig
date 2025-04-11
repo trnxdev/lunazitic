@@ -122,10 +122,11 @@ pub fn deinit(self: *@This()) void {
         mfp.deinit();
     }
 
-    defer for (self.values.items) |item| {
+    for (self.values.items) |item| {
         item.deinit(self.allocator);
-    };
+    }
 
+    self.values.deinit(self.allocator);
     self.allocator.free(self.metatables_for_primitives);
 }
 
