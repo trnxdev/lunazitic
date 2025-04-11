@@ -445,6 +445,7 @@ fn if_truthy(value: Value) bool {
 pub fn newScope(self: *@This(), scope: *Scope) !*Scope {
     std.debug.assert(scope.index < self.scopes.len -| 1);
     const new_scope: *Scope = &self.scopes[scope.index + 1];
+    new_scope.* = .{};
     new_scope.index = scope.index + 1;
     return new_scope;
 }
@@ -600,11 +601,11 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
         },
         .call_func => |cf| {
             const function = try self.getOperand(cf.func, closure, scope);
-            var buf: [1024]Value = undefined;
             var result: Value = undefined;
 
             if (cf.args) |args| {
                 if (args.len >= 255) @panic("too much");
+                var buf: [1024]Value = undefined;
                 const reg_values = try self.resolveOperandListToBuf(args.*, &buf, closure, scope);
                 result = try self.callFunction(function, scope, buf[0..reg_values]);
             } else {
