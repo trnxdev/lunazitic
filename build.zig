@@ -6,7 +6,7 @@ pub fn build(b: *std.Build) void {
     const use_gpa = b.option(bool, "use-gpa", "Use the General Purpose Allocator") orelse (optimize == .Debug);
 
     const exe = b.addExecutable(.{
-        .name = "smollscript",
+        .name = "lunazitic",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
