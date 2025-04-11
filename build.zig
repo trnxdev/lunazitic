@@ -13,14 +13,23 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
+    const version = @embedFile("version.txt");
+
+    // Validate the version string
+    _ = std.SemanticVersion.parse(version) catch |e| {
+        std.log.err("Error occured while parsing version ({s}) to semver: {}", .{ version, e });
+        return;
+    };
+
     const options = b.addOptions();
     options.addOption(bool, "use-gpa", use_gpa);
+    options.addOption([]const u8, "version", version);
     exe.root_module.addOptions("build_options", options);
 
-    //    if (optimize != .Debug) {
-    const jdz_dep = b.dependency("jdz", .{});
-    exe.root_module.addImport("jdz", jdz_dep.module("jdz_allocator"));
-    //  }
+    if (!use_gpa) {
+        const jdz_dep = b.dependency("jdz", .{});
+        exe.root_module.addImport("jdz", jdz_dep.module("jdz_allocator"));
+    }
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());

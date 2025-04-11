@@ -181,7 +181,7 @@ pub fn main() !u8 {
             return 0;
         },
         Command.version => {
-            std.io.getStdOut().writer().writeAll(@embedFile("version.txt") ++ "\n") catch @panic("Stdout not available.");
+            std.io.getStdOut().writer().writeAll(build_options.version ++ "\n") catch @panic("Stdout not available.");
             return 0;
         },
     }
