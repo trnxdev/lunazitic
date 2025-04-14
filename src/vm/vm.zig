@@ -25,7 +25,7 @@ values: std.ArrayListUnmanaged(*Object.ObjObject),
 scopes: [std.math.maxInt(u8)]Scope = undefined,
 global_symbol_map: []const Compiler.KstringVSymbol = &.{},
 tags_ran: [MAX_INSTRUCTIONS]usize = [_]usize{0} ** MAX_INSTRUCTIONS,
-save: []Value = &.{},
+save: ?[]Value = null,
 
 const MpType = enum(u4) {
     Number,
@@ -128,6 +128,8 @@ pub fn deinit(self: *@This()) void {
 
     self.values.deinit(self.allocator);
     self.allocator.free(self.metatables_for_primitives);
+    if (self.save) |s| self.allocator.free(s);
+    self.allocator.destroy(self);
 }
 
 pub fn errorFmt(_: *@This(), err: anyerror, comptime log_fmt: []const u8, log_args: anytype) anyerror {
@@ -482,7 +484,7 @@ pub inline fn getOperand(self: *@This(), op: Compiler.Instruction.Operand, closu
         .local => |l| scope.locals[l],
         .register => |r| scope.registers[r],
         .upvalue => |u| closure.upvalues[u].*,
-        .save_or_nil => |s| if (self.save.len > s) self.save[s] else Value.initNil(),
+        .save_or_nil => |s| if (self.save != null and self.save.?.len > s) self.save.?[s] else Value.initNil(),
     };
 }
 
@@ -578,14 +580,14 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
 
     switch (instr) {
         .unwrap_tuple_save => |op_list| {
-            self.allocator.free(self.save);
+            if (self.save) |s| self.allocator.free(s);
             const values = try self.resolveOperandListToValues(op_list, closure, scope);
             const resolved_values = try self.extractTuples(values, 255);
             self.allocator.free(values);
             self.save = resolved_values;
         },
         .unwrap_single_tuple_save => |op| {
-            self.allocator.free(self.save);
+            if (self.save) |s| self.allocator.free(s);
             const resolved_values = try self.extractTuples(&.{try self.getOperand(op, closure, scope)}, 255);
             self.save = resolved_values;
         },
@@ -697,8 +699,11 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
             (try self.getOperandPtr(nt, closure, scope)).* = (try Object.ObjTable.create(self)).object.asValue();
         },
         .table_append_save_after => |tsa| {
+            if (self.save == null)
+                @panic("Save not found");
+
             const table: *Object.ObjTable = (try self.getOperand(tsa.table, closure, scope)).asObjectOfType(.Table);
-            for (self.save[tsa.after..]) |val|
+            for (self.save.?[tsa.after..]) |val|
                 try table.fields.putNoKey(val);
         },
         .table_append => |ta| {
@@ -820,8 +825,11 @@ pub fn extractTuples(self: *@This(), args: []const Value, max: usize) ![]Value {
                 var val = tupl;
 
                 // TODO: A better way to fix this shit.
-                if (tupl.isObjectOfType(.Tuple))
-                    val = (try self.extractTuples(&.{tupl}, max))[0];
+                if (tupl.isObjectOfType(.Tuple)) {
+                    const inner_tupl = try self.extractTuples(&.{tupl}, max);
+                    val = inner_tupl[0];
+                    self.allocator.free(inner_tupl);
+                }
 
                 extracted[i + j] = val;
             }

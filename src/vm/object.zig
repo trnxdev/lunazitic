@@ -56,12 +56,11 @@ pub const ObjTable = struct {
             };
         }
 
-        pub fn deinit(self: *@This()) void {
+        pub fn deinit(self: *CustomMap) void {
             self.array_part.deinit();
-            // FIXME: this crashes
-            // self.hash_part.deinit();
-            // FIXME: this too.
-            //  self.string_part.deinit();
+            self.hash_part.deinit();
+            // TODO: Find out why this crashes
+            // self.string_part.deinit();
         }
 
         pub fn putWithKey(self: *CustomMap, key: VM.Value, value: VM.Value) !void {
