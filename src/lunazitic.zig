@@ -88,3 +88,66 @@ pub fn compileStringToClosure(self: *API, string: []const u8) !*Object.ObjClosur
     const root_closure = try self.compiler.compileRoot(root);
     return root_closure;
 }
+
+pub fn getGlobal(self: *API, name: []const u8) ?Value {
+    return self.vm.global_vars.fields.string_part.get(name);
+}
+
+pub fn setGlobal(self: *API, name: []const u8, val: Value) !void {
+    const global_ptr = try self.vm.global_vars.fields.getWithStr(name);
+    global_ptr.* = val;
+}
+
+test getGlobal {
+    const allocator = std.testing.allocator;
+
+    var lz = try API.init(allocator);
+    defer lz.deinit();
+
+    _ = try lz.doString(
+        \\a = 19
+        \\local b = 29
+        \\
+        \\local function in_a_new_scope()
+        \\  c = 39
+        \\  local d = 49
+        \\end
+        \\
+        \\in_a_new_scope()
+    );
+
+    try std.testing.expectEqual(
+        lz.getGlobal("a").?.asNumber(),
+        19,
+    );
+    try std.testing.expectEqual(
+        lz.getGlobal("b"),
+        null,
+    );
+    try std.testing.expectEqual(
+        lz.getGlobal("c").?.asNumber(),
+        39,
+    );
+    try std.testing.expectEqual(
+        lz.getGlobal("d"),
+        null,
+    );
+}
+
+test setGlobal {
+    const allocator = std.testing.allocator;
+
+    var lz = try API.init(allocator);
+    defer lz.deinit();
+
+    try lz.setGlobal("a", Value.initNumber(32));
+
+    const retd = try lz.doString(
+        \\return a * 2
+    );
+
+    try std.testing.expectEqual(
+        retd.?.asNumber(),
+        64,
+    );
+}
