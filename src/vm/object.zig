@@ -270,8 +270,8 @@ pub const ObjFunction = struct {
     var_arg: bool = false,
     locals: u8 = 0,
     upvalues: []Compiler.UpvalueData = &.{},
-    instructions: []const Compiler.Instruction = &.{},
-    constants: []const Value = &.{},
+    instructions: []Compiler.Instruction = &.{},
+    constants: []Value = &.{},
 
     pub fn getConstant(self: *@This(), index: usize) ?Value {
         const len = self.constants.items.len;

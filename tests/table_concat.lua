@@ -1,1 +1,1 @@
-print(table.concat { "hello", "world" })
+print(table.concat({ "hello", "world" }))

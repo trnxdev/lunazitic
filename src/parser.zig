@@ -92,7 +92,7 @@ pub fn parseStmt(self: *@This()) !*AST.Stat {
         .function => self.parseFunction(),
         .local => self.parseLocal(),
         .@"return" => self.parseReturn(),
-        else => std.debug.panic("{}", .{self.current}),
+        else => return error.ParsingError,
     };
 
     if (result == error.NotAValidVar) {

@@ -1,7 +1,7 @@
 const std = @import("std");
 const Token = @import("token.zig");
 
-buffer: []u8,
+buffer: []const u8,
 location: Token.Location,
 allocator: std.mem.Allocator, //TODO: get rid of this
 
