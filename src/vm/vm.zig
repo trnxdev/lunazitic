@@ -432,8 +432,8 @@ pub fn runClosure(self: *@This(), closure: *Object.ObjClosure, scope: *Scope) an
 //However, they do not hold a monopoly of condition values: In Lua, any value may represent a condition.
 //Conditionals (such as the ones in control structures) consider false and nil as false and anything else as true.
 //Beware that, unlike some other scripting languages, Lua considers both zero and the empty string as true in conditional tests.
-fn if_truthy(value: Value) bool {
-    if (value.isBool())
+inline fn if_truthy(value: Value) bool {
+    if (@call(.always_inline, Value.isBool, .{value}))
         return value.asBool();
 
     if (value.isNil())
@@ -476,11 +476,11 @@ pub fn destroyScope(self: *@This(), scope: *Scope) void {
     }
 }
 
-pub inline fn getOperand(self: *@This(), op: Compiler.Instruction.Operand, closure: *Object.ObjClosure, scope: *Scope) !Value {
+pub inline fn getOperand(self: *@This(), op: Compiler.Instruction.Operand, closure: *Object.ObjClosure, scope: *Scope) Value {
     return switch (op) {
         .vararg => if (scope.varargs) |va| va.object.asValue() else Value.initNil(),
         .constant => |c| closure.func.constants[c],
-        .global => |g| (try self.global_vars.fields.getWithStr(self.global_symbol_map[g].k)).*,
+        .global => |g| self.global_vars.fields.string_part.get(self.global_symbol_map[g].k) orelse Value.initNil(),
         .local => |l| scope.locals[l],
         .register => |r| scope.registers[r],
         .upvalue => |u| closure.upvalues[u].*,
@@ -520,8 +520,8 @@ pub inline fn bin_op(
         },
         // https://godbolt.org/z/WTMs1bM3W
         inline .Add, .Sub, .Mul, .Div => |a| {
-            const lhs_num = try left.asNumberCast(.{ .string = true });
-            const rhs_num = try right.asNumberCast(.{ .string = true });
+            const lhs_num = try left.asNumberCast(.{});
+            const rhs_num = try right.asNumberCast(.{});
 
             dest.* = Value.initNumber(switch (a) {
                 .Add => lhs_num + rhs_num,
@@ -580,16 +580,16 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
 
     switch (instr) {
         .unwrap_tuple_save => |op_list| {
-            if (self.save) |s| self.allocator.free(s);
-            const values = try self.resolveOperandListToValues(op_list, closure, scope);
-            const resolved_values = try self.extractTuples(values, 255);
-            self.allocator.free(values);
-            self.save = resolved_values;
+            var o_buf: [255]Value = undefined;
+            const values = try self.resolveOperandListToBuf(op_list, &o_buf, closure, scope);
+            var buf: [255]Value = undefined;
+            const resolved_values = try self.extractTuples(&buf, o_buf[0..values]);
+            self.save = buf[0..resolved_values];
         },
         .unwrap_single_tuple_save => |op| {
-            if (self.save) |s| self.allocator.free(s);
-            const resolved_values = try self.extractTuples(&.{try self.getOperand(op, closure, scope)}, 255);
-            self.save = resolved_values;
+            var buf: [255]Value = undefined;
+            const resolved_values = try self.extractTuples(&buf, &.{self.getOperand(op, closure, scope)});
+            self.save = buf[0..resolved_values];
         },
         .set_local_from_constant => |slfc| {
             scope.locals[slfc.local] = closure.func.constants[slfc.constant];
@@ -603,7 +603,7 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
             scope.return_slot = try Object.ObjTuple.createOwned(self, buf[0..len]);
         },
         .call_func => |cf| {
-            const function = try self.getOperand(cf.func, closure, scope);
+            const function = self.getOperand(cf.func, closure, scope);
             var result: Value = undefined;
 
             if (cf.args) |args| {
@@ -619,7 +619,7 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
                 (try self.getOperandPtr(dest, closure, scope)).* = result;
         },
         .copy => |c| {
-            (try self.getOperandPtr(c.dest, closure, scope)).* = try self.getOperand(c.src, closure, scope);
+            (try self.getOperandPtr(c.dest, closure, scope)).* = self.getOperand(c.src, closure, scope);
         },
         .set_nil_local => |snl| {
             scope.locals[snl] = Value.initNil();
@@ -653,8 +653,8 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
         },
         .numeric_for_loop => {},
         .bin => |b| {
-            const left = try self.getOperand(b.lhs, closure, scope);
-            const right = try self.getOperand(b.rhs, closure, scope);
+            const left = self.getOperand(b.lhs, closure, scope);
+            const right = self.getOperand(b.rhs, closure, scope);
             const dest = try self.getOperandPtr(b.dest, closure, scope);
 
             try self.bin_op(b.op, left, right, dest, scope);
@@ -677,7 +677,7 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
             try self.bin_op(b.op, left, right, dest, scope);
         },
         .unary_op => |u| {
-            const value = try self.getOperand(u.src, closure, scope);
+            const value = self.getOperand(u.src, closure, scope);
             const dest = try self.getOperandPtr(u.dest, closure, scope);
 
             switch (u.op) {
@@ -702,29 +702,29 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
             if (self.save == null)
                 @panic("Save not found");
 
-            const table: *Object.ObjTable = (try self.getOperand(tsa.table, closure, scope)).asObjectOfType(.Table);
+            const table: *Object.ObjTable = (self.getOperand(tsa.table, closure, scope)).asObjectOfType(.Table);
             for (self.save.?[tsa.after..]) |val|
                 try table.fields.putNoKey(val);
         },
         .table_append => |ta| {
-            const table: *Object.ObjTable = (try self.getOperand(ta.table, closure, scope)).asObjectOfType(.Table);
-            try table.fields.putNoKey(try self.getOperand(ta.value, closure, scope));
+            const table: *Object.ObjTable = (self.getOperand(ta.table, closure, scope)).asObjectOfType(.Table);
+            try table.fields.putNoKey(self.getOperand(ta.value, closure, scope));
         },
         .table_set_by_str => |ta| {
-            const table: *Object.ObjTable = (try self.getOperand(ta.table, closure, scope)).asObjectOfType(.Table);
+            const table: *Object.ObjTable = (self.getOperand(ta.table, closure, scope)).asObjectOfType(.Table);
             const field = try table.fields.getWithStr(ta.field);
-            field.* = try self.getOperand(ta.value, closure, scope);
+            field.* = self.getOperand(ta.value, closure, scope);
         },
         .table_set_by_value => |ta| {
-            const field_val = try self.getOperand(ta.field, closure, scope);
+            const field_val = self.getOperand(ta.field, closure, scope);
             if (field_val.isNil())
                 return error.NilAccess;
-            const table: *Object.ObjTable = (try self.getOperand(ta.table, closure, scope)).asObjectOfType(.Table);
+            const table: *Object.ObjTable = (self.getOperand(ta.table, closure, scope)).asObjectOfType(.Table);
             const field = try table.fields.getWithKey(field_val);
-            field.* = try self.getOperand(ta.value, closure, scope);
+            field.* = self.getOperand(ta.value, closure, scope);
         },
         .get_field_by_str => |ta| {
-            const maybe_table = try self.getOperand(ta.table, closure, scope);
+            const maybe_table = self.getOperand(ta.table, closure, scope);
 
             const table: *Object.ObjTable = if (maybe_table.isObjectOfType(.Table))
                 maybe_table.asObjectOfType(.Table)
@@ -736,7 +736,7 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
             (try self.getOperandPtr(ta.dest, closure, scope)).* = (try table.fields.getWithStr(ta.field)).*;
         },
         .get_field_by_value => |ta| {
-            const maybe_table = try self.getOperand(ta.table, closure, scope);
+            const maybe_table = self.getOperand(ta.table, closure, scope);
 
             const table: *Object.ObjTable = if (maybe_table.isObjectOfType(.Table))
                 maybe_table.asObjectOfType(.Table)
@@ -745,7 +745,7 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
             else
                 return error.NilAccess;
 
-            const field = try self.getOperand(ta.field, closure, scope);
+            const field = self.getOperand(ta.field, closure, scope);
             (try self.getOperandPtr(ta.dest, closure, scope)).* = (try table.fields.getWithKey(field)).*;
         },
         .jump => |j| {
@@ -753,13 +753,19 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
             scope.pc = j;
         },
         .jump_if_true => |j| {
-            if (if_truthy(try self.getOperand(j.state_reg, closure, scope))) {
+            if (if_truthy(self.getOperand(j.state_reg, closure, scope))) {
+                lock_pc = true;
+                scope.pc = j.target;
+            }
+        },
+        .jump_if_nil => |j| {
+            if (self.getOperand(j.value, closure, scope).isNil()) {
                 lock_pc = true;
                 scope.pc = j.target;
             }
         },
         .jump_if_false => |j| {
-            if (!if_truthy(try self.getOperand(j.state_reg, closure, scope))) {
+            if (!if_truthy(self.getOperand(j.state_reg, closure, scope))) {
                 lock_pc = true;
                 scope.pc = j.target;
             }
@@ -810,11 +816,10 @@ pub fn sameValues(_: *@This(), lhs: Value, rhs: Value) bool {
     return false;
 }
 
-pub fn extractTuples(self: *@This(), args: []const Value, max: usize) ![]Value {
-    const extracted = try self.allocator.alloc(Value, max);
-
+pub fn extractTuples(self: *@This(), extracted: []Value, args: []const Value) !usize {
     var wrote: usize = 0;
     var wrote_before: usize = 0;
+    const max = extracted.len;
 
     for (args, 0..) |arg, i| {
         if (arg.isObjectOfType(.Tuple)) {
@@ -826,9 +831,9 @@ pub fn extractTuples(self: *@This(), args: []const Value, max: usize) ![]Value {
 
                 // TODO: A better way to fix this shit.
                 if (tupl.isObjectOfType(.Tuple)) {
-                    const inner_tupl = try self.extractTuples(&.{tupl}, max);
-                    val = inner_tupl[0];
-                    self.allocator.free(inner_tupl);
+                    var buf: [1]Value = undefined;
+                    _ = try self.extractTuples(&buf, &.{tupl});
+                    val = buf[0];
                 }
 
                 extracted[i + j] = val;
@@ -844,7 +849,7 @@ pub fn extractTuples(self: *@This(), args: []const Value, max: usize) ![]Value {
         }
     }
 
-    return try self.allocator.realloc(extracted, wrote);
+    return wrote;
 }
 
 const MAX_ARGS = 255;
@@ -855,9 +860,9 @@ pub fn callFunction(self: *@This(), func: Value, scope: *Scope, args: []Value) a
 
         for (args) |arg| {
             if (arg.isObjectOfType(.Tuple)) {
-                const extracted = try self.extractTuples(args, MAX_ARGS);
-                defer self.allocator.free(extracted);
-                return native_func.func(self, scope, extracted);
+                var buf: [MAX_ARGS]Value = undefined;
+                const extracted = try self.extractTuples(args, &buf);
+                return native_func.func(self, scope, buf[0..extracted]);
             }
         }
 
@@ -902,19 +907,9 @@ pub fn callFunction(self: *@This(), func: Value, scope: *Scope, args: []Value) a
     return Value.initNil();
 }
 
-// Caller owns memory
-pub fn resolveOperandListToValues(self: *@This(), op_list: Compiler.Instruction.OperandList, closure: *Object.ObjClosure, scope: *Scope) ![]Value {
-    const values = try self.allocator.alloc(Value, op_list.len);
-
-    for (op_list, 0..) |opr, i|
-        values[i] = try self.getOperand(opr, closure, scope);
-
-    return values;
-}
-
 pub fn resolveOperandListToBuf(self: *@This(), op_list: Compiler.Instruction.OperandList, buf: []Value, closure: *Object.ObjClosure, scope: *Scope) !usize {
     for (op_list, 0..) |opr, i|
-        buf[i] = try self.getOperand(opr, closure, scope);
+        buf[i] = self.getOperand(opr, closure, scope);
 
     return op_list.len;
 }

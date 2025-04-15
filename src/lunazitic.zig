@@ -30,7 +30,7 @@ pub fn init(allocator: std.mem.Allocator) !API {
         .allocator = allocator,
         .parser = parser,
         .compiler = compiler,
-        .vm = try VM.init(parser.arena_allocator(), 0),
+        .vm = try VM.init(allocator, 0),
     };
 }
 

@@ -18,6 +18,7 @@ pub const Instruction = union(enum) {
     jump_if_false: struct { state_reg: Operand, target: PC },
     jump_if_false_register: struct { state_reg: Reg, target: PC },
     jump_if_true: struct { state_reg: Operand, target: PC },
+    jump_if_nil: struct { value: Operand, target: PC },
     set_local_from_constant: struct { constant: Instruction.Symbol, local: Instruction.Symbol },
     numeric_for_start: struct {
         loop_pos: PC,
@@ -92,7 +93,7 @@ pub const Instruction = union(enum) {
     pub const PC = usize;
     pub const Symbol = u12; // TODO maybe usize?
     pub const Reg = u8;
-    pub const MaxReg = std.math.maxInt(Instruction.Reg);
+    pub const MaxReg = std.math.maxInt(Reg);
     pub const OperandList = []const Operand;
 
     const LhsRhsDest = struct {
@@ -398,16 +399,19 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
         },
         .VarDecl => |vd| {
             var operands = std.ArrayList(Instruction.Operand).init(self.allocator);
-            defer while (operands.pop()) |op| worker.freeReg(op);
 
             for (vd.Exps) |exp| {
                 const operand = try self.compileExp(exp.*, worker);
                 try operands.append(operand);
             }
 
+            const ops = try operands.toOwnedSlice();
+
             try worker.instructions.append(self.allocator, Instruction{
-                .unwrap_tuple_save = try operands.toOwnedSlice(),
+                .unwrap_tuple_save = ops,
             });
+
+            for (ops) |op| worker.freeReg(op);
 
             for (vd.Vars, 0..) |variable, i| {
                 const operand: Instruction.Operand = .{ .save_or_nil = @intCast(i) };
@@ -455,16 +459,17 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
 
             var reg_exps: std.ArrayListUnmanaged(Instruction.Operand) = .{};
             defer reg_exps.deinit(self.allocator);
-            defer for (reg_exps.items) |reg_exp| worker.freeReg(reg_exp);
 
             for (exps) |exp| {
                 const exp_result = try self.compileExp(exp.*, worker);
                 try reg_exps.append(self.allocator, exp_result);
             }
 
+            const rgs = try reg_exps.toOwnedSlice(self.allocator);
             try worker.instructions.append(self.allocator, Instruction{
-                .unwrap_tuple_save = try reg_exps.toOwnedSlice(self.allocator),
+                .unwrap_tuple_save = rgs,
             });
+            for (rgs) |rg| worker.freeReg(rg);
 
             std.debug.assert(lvd.Names.len < 255);
 
@@ -566,16 +571,16 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
         .Return => |r| {
             var reg_list: std.ArrayListUnmanaged(Instruction.Operand) = .{};
 
-            //
             for (r) |exp| {
                 const exp_result = try self.compileExp(exp.*, worker);
-                defer worker.freeReg(exp_result);
                 try reg_list.append(self.allocator, exp_result);
             }
 
+            const rl = try reg_list.toOwnedSlice(self.allocator);
             try worker.instructions.append(self.allocator, Instruction{
-                .@"return" = try reg_list.toOwnedSlice(self.allocator),
+                .@"return" = rl,
             });
+            for (rl) |rs| worker.freeReg(rs);
         },
         .LocalFunction => |lf| {
             const func_symbol = (try worker.getOrCreateLocalData(lf.Name, false)).symbol;
@@ -616,24 +621,24 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
         },
         .GenericFor => |gf| {
             var operands = std.ArrayList(Instruction.Operand).init(self.allocator);
-            defer while (operands.pop()) |op| worker.freeReg(op);
 
             for (gf.Exps) |exp| {
                 try operands.append(try self.compileExp(exp.*, worker));
             }
 
-            // Initter returns (iterator as a function, ?param1, ?param2)
+            const ops = try operands.toOwnedSlice();
+            try worker.instructions.append(self.allocator, Instruction{
+                .unwrap_tuple_save = ops,
+            });
+            for (ops) |op| worker.freeReg(op);
 
+            // Initter returns (iterator as a function, ?param1, ?param2)
             const iterator = try worker.allocateReg();
             defer worker.freeReg(iterator);
             const param_1 = try worker.allocateReg();
             defer worker.freeReg(param_1);
             const param_2 = try worker.allocateReg();
             defer worker.freeReg(param_2);
-
-            try worker.instructions.append(self.allocator, Instruction{
-                .unwrap_tuple_save = try operands.toOwnedSlice(),
-            });
 
             try worker.instructions.append(self.allocator, Instruction{ .copy = .{
                 .src = .{ .save_or_nil = 0 },
@@ -668,15 +673,6 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
 
             try worker.instructions.append(self.allocator, Instruction{ .unwrap_single_tuple_save = iterator_res });
 
-            const dest = try worker.allocateReg();
-
-            try worker.instructions.append(self.allocator, Instruction{ .bin = .{
-                .lhs = .{ .save_or_nil = 0 },
-                .rhs = try self.fetchNil(worker),
-                .dest = dest,
-                .op = .Eql,
-            } });
-
             // var_1, ···, var_n => local var_1, ···, var_n = f(s, var)
             for (gf.Names, 0..) |name, i| {
                 if (i >= gf.Names.len) break;
@@ -690,11 +686,10 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
 
             //  if var_1 == nil then break end
             const to_patch = worker.instructions.items.len;
-            try worker.instructions.append(self.allocator, Instruction{ .jump_if_true = .{
-                .state_reg = dest,
+            try worker.instructions.append(self.allocator, Instruction{ .jump_if_nil = .{
+                .value = .{ .save_or_nil = 0 },
                 .target = 0,
             } });
-            worker.freeReg(dest);
 
             // var = var_1
             try worker.instructions.append(self.allocator, Instruction{ .copy = .{
@@ -707,7 +702,7 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
             }
 
             try worker.instructions.append(self.allocator, Instruction{ .jump = begin });
-            worker.instructions.items[to_patch].jump_if_true.target = worker.instructions.items.len;
+            worker.instructions.items[to_patch].jump_if_nil.target = worker.instructions.items.len;
         },
         else => |a| std.debug.panic("TODO {}\n", .{a}),
     }
@@ -764,14 +759,12 @@ pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instru
         .String => |string| try self.fetchString(worker, string),
         .Binary => |b| {
             const lhs = try self.compileExp(b.Left.*, worker); // Also dest
-            defer worker.freeReg(lhs);
-
-            const dest = try worker.allocateReg();
 
             // And and Or use short-cut evaluation, which
             // may not evaluate the right-hand side and
             // spend less time or not error out
             if (b.Op == .And) {
+                const dest = try worker.allocateReg();
                 try worker.instructions.append(self.allocator, Instruction{ .copy = .{
                     .src = lhs,
                     .dest = dest,
@@ -796,6 +789,7 @@ pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instru
             }
 
             if (b.Op == .Or) {
+                const dest = try worker.allocateReg();
                 const to_patch = worker.instructions.items.len;
                 try worker.instructions.append(self.allocator, Instruction{ .jump_if_true = .{
                     .state_reg = lhs,
@@ -825,6 +819,8 @@ pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instru
 
             const rhs = try self.compileExp(b.Right.*, worker);
             defer worker.freeReg(rhs);
+
+            const dest = try worker.allocateReg();
 
             try self.putOptimizedBin(lhs, rhs, dest, b.Op, worker);
 
@@ -1031,15 +1027,6 @@ pub fn startTable(self: *@This(), worker: *Worker) !Instruction.Operand {
 
 // If need_output is false, then the result is 0
 pub fn funcCall(self: *@This(), fc: AST.FunctionCall, worker: *Worker, comptime need_output: bool) anyerror!?Instruction.Operand {
-    const prefix = if (fc.Method) |method|
-        try self.compilePrefix(.{ .Var = .{ .DotAccess = .{
-            .Key = method,
-            .Prefix = fc.Prefix,
-        } } }, worker)
-    else
-        try self.compilePrefix(fc.Prefix.*, worker);
-    defer worker.freeReg(prefix);
-
     var reg_args: std.ArrayListUnmanaged(Instruction.Operand) = .{};
 
     if (fc.Method) |_| {
@@ -1067,14 +1054,22 @@ pub fn funcCall(self: *@This(), fc: AST.FunctionCall, worker: *Worker, comptime 
     ptr_to_fra.* = final_reg_args;
 
     const dest = try worker.allocateReg();
-    defer if (!need_output)
-        worker.freeReg(dest);
+    if (!need_output) worker.freeReg(dest);
+
+    const prefix = if (fc.Method) |method|
+        try self.compilePrefix(.{ .Var = .{ .DotAccess = .{
+            .Key = method,
+            .Prefix = fc.Prefix,
+        } } }, worker)
+    else
+        try self.compilePrefix(fc.Prefix.*, worker);
 
     try worker.instructions.append(self.allocator, Instruction{ .call_func = .{
         .func = prefix,
         .args = ptr_to_fra,
         .dest = dest,
     } });
+    worker.freeReg(prefix);
 
     return if (need_output) dest else null;
 }
