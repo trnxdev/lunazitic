@@ -12,7 +12,8 @@ const Compiler = @import("compiler.zig");
 
 allocator: std.mem.Allocator,
 global_vars: *Object.ObjTable,
-metatables_for_primitives: MpPrimitivesMaps, // like "string".byte("otherstring"), was implemented before rewrite
+string_pool: std.StringHashMap(*Object.ObjString),
+metatables_for_primitives: MpPrimitivesMaps = undefined, // like "string".byte("otherstring"), was implemented before rewrite
 internals: struct {
     magic_number_1: usize = 0,
     magic_number_0: usize = 0,
@@ -24,7 +25,6 @@ internals: struct {
 values: std.ArrayListUnmanaged(*Object.ObjObject),
 scopes: [std.math.maxInt(u8)]Scope = undefined,
 global_symbol_map: []const Compiler.KstringVSymbol = &.{},
-tags_ran: [MAX_INSTRUCTIONS]usize = [_]usize{0} ** MAX_INSTRUCTIONS,
 save: ?[]Value = null,
 
 const MpType = enum(u4) {
@@ -34,7 +34,7 @@ const MpType = enum(u4) {
     String,
 };
 // !!! Length is Amount of fields in MpType
-const MpPrimitivesMaps = []*Object.ObjTable;
+const MpPrimitivesMaps = [4]Object.ObjTable;
 
 const MAX_SYMBOL = std.math.maxInt(Compiler.Instruction.Symbol);
 const MAX_INSTRUCTIONS = @typeInfo(Compiler.Instruction).@"union".fields.len;
@@ -76,58 +76,53 @@ pub fn init(
         },
         .global_vars = try Object.ObjTable.createIndependant(allocator),
         .allocator = allocator,
-        .metatables_for_primitives = undefined,
+        .string_pool = std.StringHashMap(*Object.ObjString).init(allocator),
         .values = .{},
     };
     vm.internals.reference_to_next = try Object.ObjNativeFunction.create(vm, &next);
     vm.internals.reference_to_inner_ipairs = try Object.ObjNativeFunction.create(vm, &inner_ipairs);
-    vm.metatables_for_primitives = try allocator.alloc(*Object.ObjTable, 4);
-    for (vm.metatables_for_primitives) |*mpt| mpt.* = try Object.ObjTable.createIndependant(vm.allocator);
+    // vm.metatables_for_primitives = try allocator.alloc(*Object.ObjTable, 4);
+    //   for (vm.metatables_for_primitives) |*mpt| mpt.* = try Object.ObjTable.createIndependant(vm.allocator);
 
-    try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "print")).object.asValue(), (try Object.ObjNativeFunction.create(vm, &print)).object.asValue());
-    try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "tostring")).object.asValue(), (try Object.ObjNativeFunction.create(vm, &tostring)).object.asValue());
-    try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "assert")).object.asValue(), (try Object.ObjNativeFunction.create(vm, &assert)).object.asValue());
-    try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "next")).object.asValue(), (try Object.ObjNativeFunction.create(vm, &next)).object.asValue());
-    try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "pairs")).object.asValue(), (try Object.ObjNativeFunction.create(vm, &pairs)).object.asValue());
-    try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "ipairs")).object.asValue(), (try Object.ObjNativeFunction.create(vm, &ipairs)).object.asValue());
-    try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "_G")).object.asValue(), vm.global_vars.object.asValue());
-    try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "_VERSION")).object.asValue(), (try Object.ObjString.create(vm, "Lua 5.1")).object.asValue());
+    try vm.global_vars.fields.putWithKeyObjectAuto("print", try Object.ObjNativeFunction.create(vm, &print));
+    try vm.global_vars.fields.putWithKeyObjectAuto("tostring", try Object.ObjNativeFunction.create(vm, &tostring));
+    try vm.global_vars.fields.putWithKeyObjectAuto("assert", try Object.ObjNativeFunction.create(vm, &assert));
+    try vm.global_vars.fields.putWithKeyObjectAuto("next", try Object.ObjNativeFunction.create(vm, &next));
+    try vm.global_vars.fields.putWithKeyObjectAuto("pairs", try Object.ObjNativeFunction.create(vm, &pairs));
+    try vm.global_vars.fields.putWithKeyObjectAuto("ipairs", try Object.ObjNativeFunction.create(vm, &ipairs));
+    try vm.global_vars.fields.putWithKeyObjectAuto("_G", vm.global_vars);
+    try vm.global_vars.fields.putWithKeyObjectAuto("_VERSION", try Object.ObjString.create(vm, "Lua 5.1"));
 
     // String STD + Primitive Metatable
-    const string_table = vm.metatables_for_primitives[@intFromEnum(MpType.String)];
+    const string_table = &vm.metatables_for_primitives[@intFromEnum(MpType.String)];
     string_table.* = ((try std_string.init(vm)).asObjectOfType(.Table)).*;
-    try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "string")).object.asValue(), string_table.*.object.asValue());
+    try vm.global_vars.fields.putWithKeyObjectAuto("string", string_table.*);
 
     // Table STD
     const table = try std_table.init(vm);
-    try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "table")).object.asValue(), table);
+    try vm.global_vars.fields.putWithKey("table", table);
 
     // Math STD
     const math = try std_math.init(vm);
-    try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "math")).object.asValue(), math);
+    try vm.global_vars.fields.putWithKey("math", math);
 
     // OS STD
     const os = try std_os.init(vm);
-    try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "os")).object.asValue(), os);
+    try vm.global_vars.fields.putWithKey("os", os);
 
     // IO STD
     const io = try std_io.init(vm);
-    try vm.global_vars.fields.putWithKey((try Object.ObjString.create(vm, "io")).object.asValue(), io);
+    try vm.global_vars.fields.putWithKey("io", io);
 
     return vm;
 }
 
 pub fn deinit(self: *@This()) void {
-    for (self.metatables_for_primitives) |mfp| {
-        mfp.deinit();
-    }
-
     for (self.values.items) |item| {
         item.deinit(self.allocator);
     }
 
     self.values.deinit(self.allocator);
-    self.allocator.free(self.metatables_for_primitives);
     if (self.save) |s| self.allocator.free(s);
     self.allocator.destroy(self);
 }
@@ -223,7 +218,7 @@ pub fn getMetaTable(self: *@This(), value: Value) ?*Object.ObjTable {
     else
         return null;
 
-    return self.metatables_for_primitives[@intFromEnum(mp_type)];
+    return &self.metatables_for_primitives[@intFromEnum(mp_type)];
 }
 
 // TODO: needs updating
@@ -417,7 +412,7 @@ pub fn assert(vm: *VM, scope: *Scope, args: []Value) anyerror!Value {
 
 pub fn runClosure(self: *@This(), closure: *Object.ObjClosure, scope: *Scope) anyerror!void {
     o: while (scope.pc < closure.func.instructions.len) {
-        try self.runInstr(closure.func.instructions[scope.pc], closure, scope);
+        try @call(.always_inline, runInstr, .{ self, closure.func.instructions[scope.pc], closure, scope });
 
         if (scope.exit == .NaturalEnd)
             scope.exit = .None;
@@ -572,7 +567,6 @@ pub inline fn bin_op(
 }
 
 pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.ObjClosure, scope: *Scope) !void {
-    // self.tags_ran[@intFromEnum(std.meta.activeTag(instr))] += 1;
     var lock_pc: bool = false;
     defer if (!lock_pc) {
         scope.pc += 1;

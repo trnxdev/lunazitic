@@ -23,14 +23,14 @@ pub fn init(allocator: std.mem.Allocator) !API {
     const parser = try allocator.create(Parser);
     parser.* = Parser.init(allocator, undefined);
 
-    const compiler = try allocator.create(Compiler);
+    const compiler = try parser.arena_allocator().create(Compiler);
     compiler.* = Compiler.init(parser.arena_allocator());
 
     return .{
-        .allocator = allocator,
+        .allocator = parser.arena_allocator(),
         .parser = parser,
         .compiler = compiler,
-        .vm = try VM.init(allocator, 0),
+        .vm = try VM.init(parser.arena_allocator(), 0),
     };
 }
 
@@ -40,7 +40,7 @@ pub fn deinit(self: *API) void {
     self.parser.deinit();
 
     self.allocator.destroy(self.compiler);
-    self.allocator.destroy(self.parser);
+    self.parser.arena.child_allocator.destroy(self.parser);
 }
 
 pub fn doString(self: *API, string: []const u8) !?Value {

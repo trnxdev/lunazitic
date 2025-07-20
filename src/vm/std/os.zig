@@ -2,11 +2,13 @@ const std = @import("std");
 const VM = @import("../vm.zig");
 const Value = @import("../value.zig");
 
+const NativeFunction = VM.Object.ObjNativeFunction;
+
 pub fn init(vm: *VM) !VM.Value {
     const os = try VM.Object.ObjTable.create(vm);
-    try os.fields.putWithKey((try VM.Object.ObjString.create(vm, "clock")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &clock)).object.asValue());
-    try os.fields.putWithKey((try VM.Object.ObjString.create(vm, "getenv")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &getenv)).object.asValue());
-    try os.fields.putWithKey((try VM.Object.ObjString.create(vm, "execute")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &execute)).object.asValue());
+    try os.fields.putWithKeyObjectAuto("clock", try NativeFunction.create(vm, &clock));
+    try os.fields.putWithKeyObjectAuto("getenv", try NativeFunction.create(vm, &getenv));
+    try os.fields.putWithKeyObjectAuto("execute", try NativeFunction.create(vm, &execute));
     return os.object.asValue();
 }
 

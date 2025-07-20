@@ -4,41 +4,43 @@ const VM = @import("../vm.zig");
 pub const huge = std.math.inf(f64);
 pub const pi = std.math.pi;
 
+const NativeFunction = VM.Object.ObjNativeFunction;
+
 pub fn init(vm: *VM) !VM.Value {
     const math = try VM.Object.ObjTable.create(vm);
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "abs")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &abs)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "acos")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &acos)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "asin")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &asin)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "atan")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &atan)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "atan2")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &atan2)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "ceil")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &ceil)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "cos")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &cos)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "cosh")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &cosh)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "deg")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &deg)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "exp")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &exp)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "floor")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &floor)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "fmod")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &fmod)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "frexp")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &frexp)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "ldexp")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &ldexp)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "log")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &log)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "log10")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &log10)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "max")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &max)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "min")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &min)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "modf")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &modf)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "pow")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &pow)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "rad")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &rad)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "random")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &random)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "randomseed")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &randomseed)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "sin")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &sin)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "sinh")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &sinh)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "sqrt")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &sqrt)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "tan")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &tan)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "tanh")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &tanh)).object.asValue());
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "huge")).object.asValue(), VM.Value.initNumber(huge));
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "pi")).object.asValue(), VM.Value.initNumber(pi));
+    try math.fields.putWithKeyObjectAuto("abs", try NativeFunction.create(vm, &abs));
+    try math.fields.putWithKeyObjectAuto("acos", try NativeFunction.create(vm, &acos));
+    try math.fields.putWithKeyObjectAuto("asin", try NativeFunction.create(vm, &asin));
+    try math.fields.putWithKeyObjectAuto("atan", try NativeFunction.create(vm, &atan));
+    try math.fields.putWithKeyObjectAuto("atan2", try NativeFunction.create(vm, &atan2));
+    try math.fields.putWithKeyObjectAuto("ceil", try NativeFunction.create(vm, &ceil));
+    try math.fields.putWithKeyObjectAuto("cos", try NativeFunction.create(vm, &cos));
+    try math.fields.putWithKeyObjectAuto("cosh", try NativeFunction.create(vm, &cosh));
+    try math.fields.putWithKeyObjectAuto("deg", try NativeFunction.create(vm, &deg));
+    try math.fields.putWithKeyObjectAuto("exp", try NativeFunction.create(vm, &exp));
+    try math.fields.putWithKeyObjectAuto("floor", try NativeFunction.create(vm, &floor));
+    try math.fields.putWithKeyObjectAuto("fmod", try NativeFunction.create(vm, &fmod));
+    try math.fields.putWithKeyObjectAuto("frexp", try NativeFunction.create(vm, &frexp));
+    try math.fields.putWithKeyObjectAuto("ldexp", try NativeFunction.create(vm, &ldexp));
+    try math.fields.putWithKeyObjectAuto("log", try NativeFunction.create(vm, &log));
+    try math.fields.putWithKeyObjectAuto("log10", try NativeFunction.create(vm, &log10));
+    try math.fields.putWithKeyObjectAuto("max", try NativeFunction.create(vm, &max));
+    try math.fields.putWithKeyObjectAuto("min", try NativeFunction.create(vm, &min));
+    try math.fields.putWithKeyObjectAuto("modf", try NativeFunction.create(vm, &modf));
+    try math.fields.putWithKeyObjectAuto("pow", try NativeFunction.create(vm, &pow));
+    try math.fields.putWithKeyObjectAuto("rad", try NativeFunction.create(vm, &rad));
+    try math.fields.putWithKeyObjectAuto("random", try NativeFunction.create(vm, &random));
+    try math.fields.putWithKeyObjectAuto("randomseed", try NativeFunction.create(vm, &randomseed));
+    try math.fields.putWithKeyObjectAuto("sin", try NativeFunction.create(vm, &sin));
+    try math.fields.putWithKeyObjectAuto("sinh", try NativeFunction.create(vm, &sinh));
+    try math.fields.putWithKeyObjectAuto("sqrt", try NativeFunction.create(vm, &sqrt));
+    try math.fields.putWithKeyObjectAuto("tan", try NativeFunction.create(vm, &tan));
+    try math.fields.putWithKeyObjectAuto("tanh", try NativeFunction.create(vm, &tanh));
+    try math.fields.putWithKey("huge", VM.Value.initNumber(huge));
+    try math.fields.putWithKey("pi", VM.Value.initNumber(pi));
 
     // Function math.mod was renamed math.fmod. (See compile-time option LUA_COMPAT_MOD in luaconf.h.)
-    try math.fields.putWithKey((try VM.Object.ObjString.create(vm, "mod")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &fmod)).object.asValue());
+    try math.fields.putWithKeyObjectAuto("mod", try NativeFunction.create(vm, &fmod));
     return math.object.asValue();
 }
 

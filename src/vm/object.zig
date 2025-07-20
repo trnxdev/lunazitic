@@ -63,11 +63,19 @@ pub const ObjTable = struct {
             // self.string_part.deinit();
         }
 
-        pub fn putWithKey(self: *CustomMap, key: VM.Value, value: VM.Value) !void {
+        pub fn putWithValue(self: *CustomMap, key: VM.Value, value: VM.Value) !void {
             try if (key.isObjectOfType(.String))
                 self.string_part.put(key.asObjectOfType(.String).value, value)
             else
                 self.hash_part.put(key, value);
+        }
+
+        pub fn putWithKey(self: *CustomMap, key: []const u8, value: Value) !void {
+            try self.string_part.put(key, value);
+        }
+
+        pub fn putWithKeyObjectAuto(self: *CustomMap, key: []const u8, value: anytype) !void {
+            try self.string_part.put(key, value.object.asValue());
         }
 
         pub fn putNoKey(self: *CustomMap, value: VM.Value) !void {
@@ -230,21 +238,35 @@ pub const ObjString = struct {
     value: []u8,
 
     pub fn create(vm: *VM, value: []const u8) !*@This() {
-        const obj_string = try vm.allocateObject();
-        obj_string.* = .{ .String = .{
-            .object = obj_string,
-            .value = try vm.allocator.dupe(u8, value),
-        } };
-        return &obj_string.String;
+        const gop = try vm.string_pool.getOrPut(value);
+
+        if (!gop.found_existing) {
+            const obj_string = try vm.allocateObject();
+            obj_string.* = .{ .String = .{
+                .object = obj_string,
+                .value = try vm.allocator.dupe(u8, value),
+            } };
+            gop.value_ptr.* = &obj_string.String;
+        }
+
+        return gop.value_ptr.*;
     }
 
     pub fn createMoved(vm: *VM, value: []u8) !*@This() {
-        const obj_string = try vm.allocateObject();
-        obj_string.* = .{ .String = .{
-            .object = obj_string,
-            .value = value,
-        } };
-        return &obj_string.String;
+        const gop = try vm.string_pool.getOrPut(value);
+
+        if (!gop.found_existing) {
+            const obj_string = try vm.allocateObject();
+            obj_string.* = .{ .String = .{
+                .object = obj_string,
+                .value = value,
+            } };
+            gop.value_ptr.* = &obj_string.String;
+        } else {
+            vm.allocator.free(value);
+        }
+
+        return gop.value_ptr.*;
     }
 
     pub fn createIndependant(allocator: std.mem.Allocator, value: []const u8) !*@This() {
@@ -269,9 +291,9 @@ pub const ObjFunction = struct {
     params: []const []const u8,
     var_arg: bool = false,
     locals: u8 = 0,
-    upvalues: []Compiler.UpvalueData = &.{},
-    instructions: []Compiler.Instruction = &.{},
-    constants: []Value = &.{},
+    upvalues: []const Compiler.UpvalueData = &.{},
+    instructions: []const Compiler.Instruction = &.{},
+    constants: []const Value = &.{},
 
     pub fn getConstant(self: *@This(), index: usize) ?Value {
         const len = self.constants.items.len;

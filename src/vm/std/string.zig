@@ -1,15 +1,18 @@
 const std = @import("std");
 const VM = @import("../vm.zig");
 
+const NativeFunction = VM.Object.ObjNativeFunction;
+
 pub fn init(vm: *VM) !VM.Value {
     const string = try VM.Object.ObjTable.create(vm);
-    try string.fields.putWithKey((try VM.Object.ObjString.create(vm, "byte")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &byte)).object.asValue());
-    try string.fields.putWithKey((try VM.Object.ObjString.create(vm, "len")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &len)).object.asValue());
-    try string.fields.putWithKey((try VM.Object.ObjString.create(vm, "lower")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &lower)).object.asValue());
-    try string.fields.putWithKey((try VM.Object.ObjString.create(vm, "upper")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &upper)).object.asValue());
-    try string.fields.putWithKey((try VM.Object.ObjString.create(vm, "sub")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &sub)).object.asValue());
-    try string.fields.putWithKey((try VM.Object.ObjString.create(vm, "reverse")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &reverse)).object.asValue());
-    try string.fields.putWithKey((try VM.Object.ObjString.create(vm, "format")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &format)).object.asValue());
+    try string.fields.putWithKeyObjectAuto("byte", try NativeFunction.create(vm, &byte));
+    try string.fields.putWithKeyObjectAuto("len", try NativeFunction.create(vm, &len));
+    try string.fields.putWithKeyObjectAuto("lower", try NativeFunction.create(vm, &lower));
+    try string.fields.putWithKeyObjectAuto("upper", try NativeFunction.create(vm, &upper));
+    try string.fields.putWithKeyObjectAuto("sub", try NativeFunction.create(vm, &sub));
+    try string.fields.putWithKeyObjectAuto("reverse", try NativeFunction.create(vm, &reverse));
+    try string.fields.putWithKeyObjectAuto("format", try NativeFunction.create(vm, &format));
+    try string.fields.putWithKeyObjectAuto("rep", try NativeFunction.create(vm, &rep));
     return string.object.asValue();
 }
 
@@ -156,4 +159,22 @@ pub fn format(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
     }
 
     return (try VM.Object.ObjString.createMoved(vm, try formatted_string.toOwnedSlice())).object.asValue();
+}
+
+// string.rep (s, n) - Returns a string that is the concatenation of n copies of the string s.
+pub fn rep(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
+    if (args.len < 2)
+        return error.InvalidArgumentCount;
+
+    const to_concatinate = try args[0].asStringCastNum(vm.allocator);
+    const times: usize = @intFromFloat(try args[1].asNumberCast(.{}));
+
+    // Fast case
+    if (times == 0)
+        return (try VM.Object.ObjString.create(vm, "")).object.asValue();
+
+    var output = std.ArrayListUnmanaged(u8){};
+    try output.writer(vm.allocator).writeBytesNTimes(to_concatinate, times);
+
+    return (try VM.Object.ObjString.createMoved(vm, try output.toOwnedSlice(vm.allocator))).object.asValue();
 }

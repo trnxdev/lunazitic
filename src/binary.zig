@@ -76,9 +76,9 @@ fn repl(lz: *lunazitic) !u8 {
 }
 
 pub fn main() !u8 {
-    var gpa = if (UseGPA) std.heap.GeneralPurposeAllocator(.{}){} else jdz.JdzAllocator(.{}).init();
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
+    var gpa = if (UseGPA) std.heap.GeneralPurposeAllocator(.{}){} else void{};
+    const allocator = if (UseGPA) gpa.allocator() else std.heap.raw_c_allocator;
+    defer _ = if (UseGPA) gpa.deinit() else void{};
 
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);

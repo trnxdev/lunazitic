@@ -3,7 +3,7 @@ const VM = @import("../vm.zig");
 
 pub fn init(vm: *VM) !VM.Value {
     const io = try VM.Object.ObjTable.create(vm);
-    try io.fields.putWithKey((try VM.Object.ObjString.create(vm, "write")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &write)).object.asValue());
+    try io.fields.putWithKeyObjectAuto("write", try VM.Object.ObjNativeFunction.create(vm, &write));
     return io.object.asValue();
 }
 

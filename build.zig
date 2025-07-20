@@ -27,8 +27,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addOptions("build_options", options);
 
     if (!use_gpa) {
-        const jdz_dep = b.dependency("jdz", .{});
-        exe.root_module.addImport("jdz", jdz_dep.module("jdz_allocator"));
+        exe.linkLibC();
     }
 
     const run_cmd = b.addRunArtifact(exe);

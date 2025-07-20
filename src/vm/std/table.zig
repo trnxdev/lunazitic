@@ -1,14 +1,16 @@
 const std = @import("std");
 const VM = @import("../vm.zig");
 
+const NativeFunction = VM.Object.ObjNativeFunction;
+
 pub fn init(vm: *VM) !VM.Value {
     const table = try VM.Object.ObjTable.create(vm);
     // Function table.setn was deprecated.
     // Function table.getn corresponds to the new length operator (#);
     // use the operator instead of the function.
     // (See compile-time option LUA_COMPAT_GETN in luaconf.h.)
-    try table.fields.putWithKey((try VM.Object.ObjString.create(vm, "getn")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &getn)).object.asValue());
-    try table.fields.putWithKey((try VM.Object.ObjString.create(vm, "concat")).object.asValue(), (try VM.Object.ObjNativeFunction.create(vm, &concat)).object.asValue());
+    try table.fields.putWithKeyObjectAuto("getn", try NativeFunction.create(vm, &getn));
+    try table.fields.putWithKeyObjectAuto("concat", try NativeFunction.create(vm, &concat));
     return table.object.asValue();
 }
 
