@@ -1,5 +1,6 @@
 const std = @import("std");
 const VM = @import("../vm.zig");
+const Pattern = @import("../pattern.zig");
 
 const NativeFunction = VM.Object.ObjNativeFunction;
 
@@ -13,11 +14,13 @@ pub fn init(vm: *VM) !VM.Value {
     try string.fields.putWithKeyObjectAuto("reverse", try NativeFunction.create(vm, &reverse));
     try string.fields.putWithKeyObjectAuto("format", try NativeFunction.create(vm, &format));
     try string.fields.putWithKeyObjectAuto("rep", try NativeFunction.create(vm, &rep));
+    // TODO: VERY BREAKING!!! WILL BE REPLACED WITH GMATCH WHEN PATTERNS ARE FULLY IMPLEMENTED
+    try string.fields.putWithKeyObjectAuto("pattern_test", try NativeFunction.create(vm, &pattern_test));
     return string.object.asValue();
 }
 
 // string.byte (s [, i [, j]])
-//Returns the internal numerical codes of the characters s[i], s[i+1], ···, s[j]. The default value for i is 1; the default value for j is i.
+// Returns the internal numerical codes of the characters s[i], s[i+1], ···, s[j]. The default value for i is 1; the default value for j is i.
 // Note that numerical codes are not necessarily portable across platforms.
 pub fn byte(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
     if (args.len < 1)
@@ -177,4 +180,28 @@ pub fn rep(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
     try output.writer(vm.allocator).writeBytesNTimes(to_concatinate, times);
 
     return (try VM.Object.ObjString.createMoved(vm, try output.toOwnedSlice(vm.allocator))).object.asValue();
+}
+
+// string.gmatch (s, pattern) - Returns an iterator that returns all occurrences of the pattern in the string s.
+pub fn pattern_test(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
+    if (args.len < 2)
+        return error.InvalidArgumentCount;
+
+    const str = try args[0].asStringCastNum(vm.allocator);
+    const pattern = try args[1].asStringCastNum(vm.allocator);
+
+    const compiled_pattern = try Pattern.make(vm.allocator, pattern);
+    //defer compiled_pattern.deinit();
+
+    // for now, just print all characters that match the pattern
+    var pattern_iterator = Pattern.Iterator{
+        .pattern = compiled_pattern,
+        .subject = str,
+    };
+
+    while (try pattern_iterator.scan()) |item| {
+        std.debug.print("{s}\n", .{item});
+    }
+
+    return VM.Value.initNil();
 }

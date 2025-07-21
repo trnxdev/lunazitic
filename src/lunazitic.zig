@@ -39,7 +39,7 @@ pub fn deinit(self: *API) void {
     self.compiler.deinit();
     self.parser.deinit();
 
-    self.allocator.destroy(self.compiler);
+    // self.allocator.destroy(self.compiler);
     self.parser.arena.child_allocator.destroy(self.parser);
 }
 
