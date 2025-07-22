@@ -52,7 +52,6 @@ pub fn doString(self: *API, string: []const u8) !?Value {
 
     self.vm.global_symbol_map = self.compiler.global_symbol_map.items;
 
-    // dump instructions
     try self.vm.runClosure(closure, scope);
 
     if (scope.return_slot) |rs| {
