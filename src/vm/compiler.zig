@@ -4,16 +4,21 @@ const Value = @import("value.zig");
 const Object = @import("object.zig");
 
 pub const Instruction = union(enum) {
-    @"return": OperandList,
+    @"return": bool, // true if it returns something, false if it returns nothing
     make_closure: struct {
         constant: usize,
         dest: Operand,
     },
     set_nil_local: Symbol,
     panic: void,
+    copy_first_from_if_tuple: SrcDest,
     copy: SrcDest,
     new_table: Operand,
-    call_func: FuncArgsM_Dest,
+    call_func_args: struct {
+        args: OperandList,
+        has_tuple: YNU,
+    },
+    call_func: FuncDest,
     jump: PC,
     jump_if_false: struct { state_reg: Operand, target: PC },
     jump_if_false_register: struct { state_reg: Reg, target: PC },
@@ -90,8 +95,13 @@ pub const Instruction = union(enum) {
     unwrap_tuple_save: OperandList,
     unwrap_single_tuple_save: Operand,
 
+    pub const YNU = enum {
+        Yes,
+        No,
+        Unknown,
+    };
     pub const PC = usize;
-    pub const Symbol = u12; // TODO maybe usize?
+    pub const Symbol = u12;
     pub const Reg = u8;
     pub const MaxReg = std.math.maxInt(Reg);
     pub const OperandList = []const Operand;
@@ -107,9 +117,8 @@ pub const Instruction = union(enum) {
     };
 
     // TODO: VarArg
-    const FuncArgsM_Dest = struct {
+    const FuncDest = struct {
         func: Operand,
-        args: ?*OperandList, // This keeps the instruction size 32 bits
         dest: ?Operand,
     };
 
@@ -124,8 +133,11 @@ pub const Instruction = union(enum) {
     };
 };
 
+//comptime {
+//    @compileLog("Instruction size: ", @sizeOf(Instruction));
+//}
+
 allocator: std.mem.Allocator,
-strings_mentioned: StringSet = .{},
 global_symbol_map: std.ArrayListUnmanaged(KstringVSymbol) = .{}, // Reduces Opreand size
 
 pub const KstringVSymbol = struct { k: []const u8, v: Instruction.Symbol };
@@ -150,6 +162,10 @@ const Worker = struct {
     reg_allocated: [Instruction.MaxReg]bool = [_]bool{false} ** Instruction.MaxReg,
     instructions: std.ArrayListUnmanaged(Instruction) = .{},
     constants: std.ArrayListUnmanaged(Value) = .{},
+
+    pub fn lastInstructionProducedTuple(self: *@This()) bool {
+        return self.instructions.items.len > 0 and self.instructions.items[self.instructions.items.len - 1] == .call_func;
+    }
 
     // Use with caution!
     pub fn peekInstruction(self: *@This()) ?*Instruction {
@@ -237,6 +253,13 @@ const Worker = struct {
             self.reg_allocated[index.register] = false;
         }
     }
+
+    pub fn deinit(self: *@This()) void {
+        self.symbol_map.deinit(self.allocator);
+        self.upvalues.deinit(self.allocator);
+        self.instructions.deinit(self.allocator);
+        self.constants.deinit(self.allocator);
+    }
 };
 
 pub fn findUpvalue(self: *@This(), worker: *Worker, name: []const u8) !?Instruction.Symbol {
@@ -262,7 +285,7 @@ pub fn init(allocator: std.mem.Allocator) @This() {
 }
 
 pub fn deinit(self: *@This()) void {
-    _ = self;
+    self.global_symbol_map.deinit(self.allocator);
 }
 
 pub fn getGlobalSymbol(self: *@This(), symbol: []const u8) !?Instruction.Symbol {
@@ -297,6 +320,7 @@ pub fn compileRoot(self: *@This(), root: AST.Block) anyerror!*Object.ObjClosure 
         false,
     );
     var worker: Worker = .{ .function = root_function, .allocator = self.allocator };
+    defer worker.deinit();
     try self.compileBlock(root, &worker);
     root_function.instructions = try worker.instructions.toOwnedSlice(self.allocator);
     root_function.constants = try worker.constants.toOwnedSlice(self.allocator);
@@ -399,22 +423,30 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
         },
         .VarDecl => |vd| {
             var operands = std.ArrayList(Instruction.Operand).init(self.allocator);
+            defer operands.deinit();
+
+            var has_tuple: bool = false;
 
             for (vd.Exps) |exp| {
                 const operand = try self.compileExp(exp.*, worker);
                 try operands.append(operand);
+
+                if (worker.lastInstructionProducedTuple())
+                    has_tuple = true;
             }
 
             const ops = try operands.toOwnedSlice();
 
-            try worker.instructions.append(self.allocator, Instruction{
-                .unwrap_tuple_save = ops,
-            });
+            if (has_tuple) {
+                try worker.instructions.append(self.allocator, Instruction{
+                    .unwrap_tuple_save = ops,
+                });
+            }
 
             for (ops) |op| worker.freeReg(op);
 
             for (vd.Vars, 0..) |variable, i| {
-                const operand: Instruction.Operand = .{ .save_or_nil = @intCast(i) };
+                const operand: Instruction.Operand = if (has_tuple) .{ .save_or_nil = @intCast(i) } else ops[i];
 
                 switch (variable) {
                     .Name => |n| {
@@ -460,23 +492,42 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
             var reg_exps: std.ArrayListUnmanaged(Instruction.Operand) = .{};
             defer reg_exps.deinit(self.allocator);
 
+            var has_tuple: bool = false;
+
             for (exps) |exp| {
                 const exp_result = try self.compileExp(exp.*, worker);
                 try reg_exps.append(self.allocator, exp_result);
+
+                if (worker.lastInstructionProducedTuple()) {
+                    has_tuple = true;
+
+                    if (lvd.Names.len == 1) {
+                        try worker.instructions.append(self.allocator, Instruction{
+                            .copy_first_from_if_tuple = .{ .src = exp_result, .dest = .{ .local = (try worker.getOrCreateLocalData(lvd.Names[0], false)).symbol } },
+                        });
+                        return;
+                    }
+                }
             }
 
             const rgs = try reg_exps.toOwnedSlice(self.allocator);
-            try worker.instructions.append(self.allocator, Instruction{
-                .unwrap_tuple_save = rgs,
-            });
+            if (has_tuple) {
+                try worker.instructions.append(self.allocator, Instruction{
+                    .unwrap_tuple_save = rgs,
+                });
+            }
             for (rgs) |rg| worker.freeReg(rg);
 
             std.debug.assert(lvd.Names.len < 255);
 
+            // local [name] = [function call]
+
             for (lvd.Names, 0..) |name, i| {
+                const operand: Instruction.Operand = if (has_tuple) .{ .save_or_nil = @as(u8, @intCast(i)) } else rgs[i];
                 const local_data = try worker.getOrCreateLocalData(name, false);
+
                 try worker.instructions.append(self.allocator, Instruction{
-                    .copy = .{ .src = .{ .save_or_nil = @intCast(i) }, .dest = .{ .local = local_data.symbol } },
+                    .copy = .{ .src = operand, .dest = .{ .local = local_data.symbol } },
                 });
             }
         },
@@ -570,17 +621,22 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
         // FIXME
         .Return => |r| {
             var reg_list: std.ArrayListUnmanaged(Instruction.Operand) = .{};
+            defer reg_list.deinit(self.allocator);
 
             for (r) |exp| {
                 const exp_result = try self.compileExp(exp.*, worker);
                 try reg_list.append(self.allocator, exp_result);
             }
 
-            const rl = try reg_list.toOwnedSlice(self.allocator);
-            try worker.instructions.append(self.allocator, Instruction{
-                .@"return" = rl,
-            });
-            for (rl) |rs| worker.freeReg(rs);
+            if (reg_list.items.len >= 1) {
+                try worker.instructions.append(self.allocator, Instruction{
+                    .unwrap_tuple_save = try reg_list.toOwnedSlice(self.allocator),
+                });
+
+                try worker.instructions.append(self.allocator, .{ .@"return" = true });
+            } else {
+                try worker.instructions.append(self.allocator, .{ .@"return" = false });
+            }
         },
         .LocalFunction => |lf| {
             const func_symbol = (try worker.getOrCreateLocalData(lf.Name, false)).symbol;
@@ -592,19 +648,19 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
                 lf.Body.Params.HasVararg,
             );
 
-            const new_worker = try self.allocator.create(Worker);
-            new_worker.* = .{
+            var new_worker = Worker{
                 .function = local_function,
                 .allocator = self.allocator,
                 .previous_worker = worker,
             };
+            defer new_worker.deinit();
 
             for (lf.Body.Params.Names) |n| {
                 _ = try new_worker.getOrCreateLocalData(n, false);
             }
 
             if (lf.Body.Block.len > 0) {
-                try self.compileBlock(lf.Body.Block, new_worker);
+                try self.compileBlock(lf.Body.Block, &new_worker);
             }
 
             local_function.instructions = try new_worker.instructions.toOwnedSlice(self.allocator);
@@ -621,6 +677,7 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
         },
         .GenericFor => |gf| {
             var operands = std.ArrayList(Instruction.Operand).init(self.allocator);
+            defer operands.deinit();
 
             for (gf.Exps) |exp| {
                 try operands.append(try self.compileExp(exp.*, worker));
@@ -658,16 +715,15 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
             const iterator_res = try worker.allocateReg();
             defer worker.freeReg(iterator_res);
 
-            const args = try self.allocator.create(Instruction.OperandList);
             const vals = try self.allocator.alloc(Instruction.Operand, 2);
             vals[0] = param_1;
             vals[1] = param_2;
 
-            args.* = vals;
-
+            try worker.instructions.append(self.allocator, Instruction{
+                .call_func_args = .{ .args = vals, .has_tuple = .Unknown },
+            });
             try worker.instructions.append(self.allocator, Instruction{ .call_func = .{
                 .func = iterator,
-                .args = args,
                 .dest = iterator_res,
             } });
 
@@ -834,19 +890,19 @@ pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instru
                 f.Params.HasVararg,
             );
 
-            const new_worker = try self.allocator.create(Worker);
-            new_worker.* = .{
+            var new_worker = Worker{
                 .function = local_function,
                 .allocator = self.allocator,
                 .previous_worker = worker,
             };
+            defer new_worker.deinit();
 
             for (f.Params.Names) |n| {
                 _ = try new_worker.getOrCreateLocalData(n, false);
             }
 
             if (f.Block.len > 0) {
-                try self.compileBlock(f.Block, new_worker);
+                try self.compileBlock(f.Block, &new_worker);
             }
 
             local_function.instructions = try new_worker.instructions.toOwnedSlice(self.allocator);
@@ -1010,7 +1066,7 @@ pub fn fetchBool(_: *@This(), worker: *Worker, state: bool) !Instruction.Operand
 }
 
 pub fn fetchString(self: *@This(), worker: *Worker, string: []const u8) !Instruction.Operand {
-    const constant_index = try worker.putConstant((try Object.ObjString.createIndependant(self.allocator, string)).object.asValue());
+    const constant_index = try worker.putConstant((try Object.ObjString.createIndependantMoved(self.allocator, string)).object.asValue());
     return .{ .constant = constant_index };
 }
 
@@ -1028,6 +1084,7 @@ pub fn startTable(self: *@This(), worker: *Worker) !Instruction.Operand {
 // If need_output is false, then the result is 0
 pub fn funcCall(self: *@This(), fc: AST.FunctionCall, worker: *Worker, comptime need_output: bool) anyerror!?Instruction.Operand {
     var reg_args: std.ArrayListUnmanaged(Instruction.Operand) = .{};
+    defer reg_args.deinit(self.allocator);
 
     if (fc.Method) |_| {
         // No need to free, since it's done in final_reg_args
@@ -1035,10 +1092,16 @@ pub fn funcCall(self: *@This(), fc: AST.FunctionCall, worker: *Worker, comptime 
         try reg_args.append(self.allocator, inner_prefix);
     }
 
+    var has_tuple: bool = false;
+
     switch (fc.Args) {
         .Explist => |exp_list| {
-            for (exp_list) |exp|
+            for (exp_list) |exp| {
                 try reg_args.append(self.allocator, try self.compileExp(exp.*, worker));
+
+                if (worker.lastInstructionProducedTuple())
+                    has_tuple = true;
+            }
         },
         .String => |str| {
             try reg_args.append(self.allocator, try self.fetchString(worker, str));
@@ -1046,12 +1109,8 @@ pub fn funcCall(self: *@This(), fc: AST.FunctionCall, worker: *Worker, comptime 
         else => @panic("TODO"),
     }
 
-    const final_reg_args = reg_args.items;
+    const final_reg_args = try reg_args.toOwnedSlice(self.allocator);
     defer for (final_reg_args) |fra| worker.freeReg(fra);
-
-    // TODO: Free
-    const ptr_to_fra = try self.allocator.create(Instruction.OperandList);
-    ptr_to_fra.* = final_reg_args;
 
     const dest = try worker.allocateReg();
     if (!need_output) worker.freeReg(dest);
@@ -1064,9 +1123,17 @@ pub fn funcCall(self: *@This(), fc: AST.FunctionCall, worker: *Worker, comptime 
     else
         try self.compilePrefix(fc.Prefix.*, worker);
 
+    if (final_reg_args.len > 255)
+        return error.TooManyFunctionArguments;
+
+    try worker.instructions.append(self.allocator, Instruction{
+        .call_func_args = .{
+            .args = final_reg_args,
+            .has_tuple = if (has_tuple) .Yes else .No,
+        },
+    });
     try worker.instructions.append(self.allocator, Instruction{ .call_func = .{
         .func = prefix,
-        .args = ptr_to_fra,
         .dest = dest,
     } });
     worker.freeReg(prefix);

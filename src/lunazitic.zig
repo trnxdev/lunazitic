@@ -23,14 +23,14 @@ pub fn init(allocator: std.mem.Allocator) !API {
     const parser = try allocator.create(Parser);
     parser.* = Parser.init(allocator, undefined);
 
-    const compiler = try parser.arena_allocator().create(Compiler);
-    compiler.* = Compiler.init(parser.arena_allocator());
+    const compiler = try allocator.create(Compiler);
+    compiler.* = Compiler.init(allocator);
 
     return .{
-        .allocator = parser.arena_allocator(),
+        .allocator = allocator,
         .parser = parser,
         .compiler = compiler,
-        .vm = try VM.init(parser.arena_allocator(), 0),
+        .vm = try VM.init(allocator, 0),
     };
 }
 
@@ -39,7 +39,7 @@ pub fn deinit(self: *API) void {
     self.compiler.deinit();
     self.parser.deinit();
 
-    // self.allocator.destroy(self.compiler);
+    self.allocator.destroy(self.compiler);
     self.parser.arena.child_allocator.destroy(self.parser);
 }
 
@@ -48,10 +48,11 @@ pub fn doString(self: *API, string: []const u8) !?Value {
     scope.* = .{};
 
     const closure = try self.compileStringToClosure(string);
-    defer closure.deinit(self.allocator);
+    // defer closure.object.deinit(self.allocator);
 
     self.vm.global_symbol_map = self.compiler.global_symbol_map.items;
 
+    // dump instructions
     try self.vm.runClosure(closure, scope);
 
     if (scope.return_slot) |rs| {

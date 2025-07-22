@@ -40,12 +40,14 @@ pub fn asNumber(self: Value) f64 {
 
 const NumberAllowCastsFrom = packed struct {
     string: bool = true,
+    tuple: bool = false,
 };
-pub inline fn asNumberCast(self: Value, allow_casts_from: NumberAllowCastsFrom) !f64 {
-    @setEvalBranchQuota(10000);
-
+pub fn asNumberCast(self: Value, allow_casts_from: NumberAllowCastsFrom) !f64 {
     if (@call(.always_inline, isNumber, .{self}))
         return self.asNumber();
+
+    if (self.isObjectOfType(.Tuple) and allow_casts_from.tuple)
+        return try self.asObjectOfType(.Tuple).values[0].asNumberCast(allow_casts_from);
 
     if (self.isObjectOfType(.String) and allow_casts_from.string)
         return try std.fmt.parseFloat(f64, self.asObjectOfType(.String).value);

@@ -20,7 +20,7 @@ pub const ObjObject = union(enum) {
             .Table => (&self.Table).deinit(),
             .String => (&self.String).deinit(allocator),
             .Closure => (&self.Closure).deinit(allocator),
-            .Function => {},
+            .Function => (&self.Function).deinit(allocator),
             .NativeFunction => {},
             .Tuple => (&self.Tuple).deinit(allocator),
         }
@@ -59,8 +59,7 @@ pub const ObjTable = struct {
         pub fn deinit(self: *CustomMap) void {
             self.array_part.deinit();
             self.hash_part.deinit();
-            // TODO: Find out why this crashes
-            // self.string_part.deinit();
+            self.string_part.deinit();
         }
 
         pub fn putWithValue(self: *CustomMap, key: VM.Value, value: VM.Value) !void {
@@ -269,7 +268,16 @@ pub const ObjString = struct {
         return gop.value_ptr.*;
     }
 
-    pub fn createIndependant(allocator: std.mem.Allocator, value: []const u8) !*@This() {
+    pub fn createIndependant(allocator: std.mem.Allocator, value: []u8) !*@This() {
+        const obj_string = try allocator.create(ObjObject);
+        obj_string.* = .{ .String = .{
+            .object = obj_string,
+            .value = value,
+        } };
+        return &obj_string.String;
+    }
+
+    pub fn createIndependantMoved(allocator: std.mem.Allocator, value: []const u8) !*@This() {
         const obj_string = try allocator.create(ObjObject);
         obj_string.* = .{ .String = .{
             .object = obj_string,
@@ -328,6 +336,24 @@ pub const ObjFunction = struct {
         } };
         return &obj_function.Function;
     }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        for (self.constants) |c| {
+            if (c.isObject())
+                c.asObject().deinit(allocator);
+        }
+
+        if (self.constants.len > 0)
+            allocator.free(self.constants);
+
+        if (self.instructions.len > 0) {
+            allocator.free(self.instructions);
+        }
+
+        if (self.upvalues.len > 0) {
+            allocator.free(self.upvalues);
+        }
+    }
 };
 
 pub const ObjClosure = struct {
@@ -374,6 +400,7 @@ pub const ObjClosure = struct {
     }
 
     pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        self.func.object.deinit(allocator);
         allocator.free(self.upvalues);
     }
 };

@@ -25,7 +25,8 @@ internals: struct {
 values: std.ArrayListUnmanaged(*Object.ObjObject),
 scopes: [std.math.maxInt(u8)]Scope = undefined,
 global_symbol_map: []const Compiler.KstringVSymbol = &.{},
-save: ?[]Value = null,
+save: [255]Value = undefined,
+save_max: usize = 0,
 
 const MpType = enum(u4) {
     Number,
@@ -81,8 +82,6 @@ pub fn init(
     };
     vm.internals.reference_to_next = try Object.ObjNativeFunction.create(vm, &next);
     vm.internals.reference_to_inner_ipairs = try Object.ObjNativeFunction.create(vm, &inner_ipairs);
-    // vm.metatables_for_primitives = try allocator.alloc(*Object.ObjTable, 4);
-    //   for (vm.metatables_for_primitives) |*mpt| mpt.* = try Object.ObjTable.createIndependant(vm.allocator);
 
     try vm.global_vars.fields.putWithKeyObjectAuto("print", try Object.ObjNativeFunction.create(vm, &print));
     try vm.global_vars.fields.putWithKeyObjectAuto("tostring", try Object.ObjNativeFunction.create(vm, &tostring));
@@ -122,8 +121,9 @@ pub fn deinit(self: *@This()) void {
         item.deinit(self.allocator);
     }
 
+    self.global_vars.object.deinit(self.allocator);
+    self.string_pool.deinit();
     self.values.deinit(self.allocator);
-    if (self.save) |s| self.allocator.free(s);
     self.allocator.destroy(self);
 }
 
@@ -479,7 +479,7 @@ pub inline fn getOperand(self: *@This(), op: Compiler.Instruction.Operand, closu
         .local => |l| scope.locals[l],
         .register => |r| scope.registers[r],
         .upvalue => |u| closure.upvalues[u].*,
-        .save_or_nil => |s| if (self.save != null and self.save.?.len > s) self.save.?[s] else Value.initNil(),
+        .save_or_nil => |s| if (self.save_max > s) self.save[s] else Value.initNil(),
     };
 }
 
@@ -515,8 +515,8 @@ pub inline fn bin_op(
         },
         // https://godbolt.org/z/WTMs1bM3W
         inline .Add, .Sub, .Mul, .Div => |a| {
-            const lhs_num = try left.asNumberCast(.{});
-            const rhs_num = try right.asNumberCast(.{});
+            const lhs_num = try left.asNumberCast(.{ .tuple = true });
+            const rhs_num = try right.asNumberCast(.{ .tuple = true });
 
             dest.* = Value.initNumber(switch (a) {
                 .Add => lhs_num + rhs_num,
@@ -576,44 +576,48 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
         .unwrap_tuple_save => |op_list| {
             var o_buf: [255]Value = undefined;
             const values = try self.resolveOperandListToBuf(op_list, &o_buf, closure, scope);
-            var buf: [255]Value = undefined;
-            const resolved_values = try self.extractTuples(&buf, o_buf[0..values]);
-            self.save = buf[0..resolved_values];
+            self.save_max = try self.extractTuples(o_buf[0..values], &self.save);
         },
         .unwrap_single_tuple_save => |op| {
-            var buf: [255]Value = undefined;
-            const resolved_values = try self.extractTuples(&buf, &.{self.getOperand(op, closure, scope)});
-            self.save = buf[0..resolved_values];
+            self.save_max = try self.extractTuples(&.{self.getOperand(op, closure, scope)}, &self.save);
         },
         .set_local_from_constant => |slfc| {
             scope.locals[slfc.local] = closure.func.constants[slfc.constant];
         },
         .panic => @panic("PANIC HIT"),
         .@"return" => |r| {
-            if (r.len >= 255) @panic("too much");
-            var buf: [1024]Value = undefined;
-            const len = try self.resolveOperandListToBuf(r, &buf, closure, scope);
             scope.exit = .Return;
-            scope.return_slot = try Object.ObjTuple.createOwned(self, buf[0..len]);
+            scope.return_slot = if (r)
+                try Object.ObjTuple.createOwned(self, self.save[0..self.save_max])
+            else
+                try Object.ObjTuple.createOwned(self, &.{});
         },
+        .call_func_args => {},
         .call_func => |cf| {
-            const function = self.getOperand(cf.func, closure, scope);
-            var result: Value = undefined;
+            const cfa = closure.func.instructions[scope.pc - 1];
+            std.debug.assert(cfa == .call_func_args);
 
-            if (cf.args) |args| {
-                if (args.len >= 255) @panic("too much");
-                var buf: [1024]Value = undefined;
-                const reg_values = try self.resolveOperandListToBuf(args.*, &buf, closure, scope);
-                result = try self.callFunction(function, scope, buf[0..reg_values]);
-            } else {
-                result = try self.callFunction(function, scope, &.{});
-            }
+            const function = self.getOperand(cf.func, closure, scope);
+
+            var buf: [1024]Value = undefined;
+            const reg_values = try self.resolveOperandListToBuf(cfa.call_func_args.args, &buf, closure, scope);
+            const result = try self.callFunction(function, scope, buf[0..reg_values], cfa.call_func_args.has_tuple);
 
             if (cf.dest) |dest|
                 (try self.getOperandPtr(dest, closure, scope)).* = result;
         },
         .copy => |c| {
             (try self.getOperandPtr(c.dest, closure, scope)).* = self.getOperand(c.src, closure, scope);
+        },
+        .copy_first_from_if_tuple => |cffit| {
+            const tuple = self.getOperand(cffit.src, closure, scope);
+
+            if (tuple.isObjectOfType(.Tuple)) {
+                const tuple_obj: *Object.ObjTuple = tuple.asObjectOfType(.Tuple);
+                (try self.getOperandPtr(cffit.dest, closure, scope)).* = if (tuple_obj.values.len == 0) Value.initNil() else tuple_obj.values[0];
+            } else {
+                (try self.getOperandPtr(cffit.dest, closure, scope)).* = self.getOperand(cffit.src, closure, scope);
+            }
         },
         .set_nil_local => |snl| {
             scope.locals[snl] = Value.initNil();
@@ -693,11 +697,8 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
             (try self.getOperandPtr(nt, closure, scope)).* = (try Object.ObjTable.create(self)).object.asValue();
         },
         .table_append_save_after => |tsa| {
-            if (self.save == null)
-                @panic("Save not found");
-
             const table: *Object.ObjTable = (self.getOperand(tsa.table, closure, scope)).asObjectOfType(.Table);
-            for (self.save.?[tsa.after..]) |val|
+            for (self.save[tsa.after..self.save_max]) |val|
                 try table.fields.putNoKey(val);
         },
         .table_append => |ta| {
@@ -809,37 +810,21 @@ pub fn sameValues(_: *@This(), lhs: Value, rhs: Value) bool {
 
     return false;
 }
-
-pub fn extractTuples(self: *@This(), extracted: []Value, args: []const Value) !usize {
+pub fn extractTuples(_: *@This(), to_extract: []const Value, dest: []Value) !usize {
     var wrote: usize = 0;
-    var wrote_before: usize = 0;
-    const max = extracted.len;
+    const max = dest.len;
 
-    for (args, 0..) |arg, i| {
+    for (to_extract) |arg| {
+        if (wrote >= max) break;
+
         if (arg.isObjectOfType(.Tuple)) {
-            for (arg.asObjectOfType(.Tuple).values, 0..) |tupl, j| {
-                if (i + j >= max)
-                    break;
-
-                var val = tupl;
-
-                // TODO: A better way to fix this shit.
-                if (tupl.isObjectOfType(.Tuple)) {
-                    var buf: [1]Value = undefined;
-                    _ = try self.extractTuples(&buf, &.{tupl});
-                    val = buf[0];
-                }
-
-                extracted[i + j] = val;
-            }
-
-            wrote_before = wrote + 1;
-            wrote = i + arg.asObjectOfType(.Tuple).values.len;
+            const tuple_vals = arg.asObjectOfType(.Tuple).values;
+            const to_copy = @min(tuple_vals.len, max - wrote);
+            std.mem.copyForwards(Value, dest[wrote..][0..to_copy], tuple_vals[0..to_copy]);
+            wrote += to_copy;
         } else {
-            extracted[i] = arg;
-            wrote = wrote_before;
+            dest[wrote] = arg;
             wrote += 1;
-            wrote_before = wrote;
         }
     }
 
@@ -848,18 +833,17 @@ pub fn extractTuples(self: *@This(), extracted: []Value, args: []const Value) !u
 
 const MAX_ARGS = 255;
 
-pub fn callFunction(self: *@This(), func: Value, scope: *Scope, args: []Value) anyerror!Value {
+pub fn callFunction(self: *@This(), func: Value, scope: *Scope, given_args: []Value, args_has_tuple: Compiler.Instruction.YNU) anyerror!Value {
+    const args = if (args_has_tuple == .No) v: {
+        break :v given_args;
+    } else v: {
+        var raw_args: [255]Value = undefined;
+        const args_len = try self.extractTuples(given_args, &raw_args);
+        break :v raw_args[0..args_len];
+    };
+
     if (func.isObjectOfType(.NativeFunction)) {
         const native_func = func.asObjectOfType(.NativeFunction);
-
-        for (args) |arg| {
-            if (arg.isObjectOfType(.Tuple)) {
-                var buf: [MAX_ARGS]Value = undefined;
-                const extracted = try self.extractTuples(args, &buf);
-                return native_func.func(self, scope, buf[0..extracted]);
-            }
-        }
-
         return native_func.func(self, scope, args);
     }
 
@@ -870,16 +854,7 @@ pub fn callFunction(self: *@This(), func: Value, scope: *Scope, args: []Value) a
     const new_scope = try self.newScope(scope);
 
     for (0..closure.func.params.len) |i| {
-        if (args[i].isObjectOfType(.Tuple)) {
-            for (i..closure.func.params.len, 0..) |j, z| {
-                if (z >= args[i].asObjectOfType(.Tuple).values.len)
-                    break;
-
-                new_scope.locals[j] = args[i].asObjectOfType(.Tuple).values[z];
-            }
-        } else {
-            new_scope.locals[i] = args[i];
-        }
+        new_scope.locals[i] = args[i];
     }
 
     if (closure.func.var_arg and args.len > closure.func.params.len) {
@@ -894,9 +869,8 @@ pub fn callFunction(self: *@This(), func: Value, scope: *Scope, args: []Value) a
     try self.runClosure(closure, new_scope);
     defer self.destroyScope(new_scope);
 
-    if (new_scope.return_slot) |rs| {
+    if (new_scope.return_slot) |rs|
         return rs.object.asValue();
-    }
 
     return Value.initNil();
 }
