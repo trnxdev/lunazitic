@@ -1,2 +1,5 @@
 s = "hello World from Lua"
-string.pattern_test(s, "%s%L%l")
+
+for i in string.gmatch(s, "%s%L%l") do
+    print(i)
+end

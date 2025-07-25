@@ -41,6 +41,7 @@ const MAX_SYMBOL = std.math.maxInt(Compiler.Instruction.Symbol);
 const MAX_INSTRUCTIONS = @typeInfo(Compiler.Instruction).@"union".fields.len;
 
 pub const Scope = struct {
+    internals: std.StringArrayHashMapUnmanaged(Value) = .{},
     outer: ?*Scope = null,
     return_slot: ?*Object.ObjTuple = null,
     varargs: ?*Object.ObjTuple = null,

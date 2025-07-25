@@ -14,8 +14,7 @@ pub fn init(vm: *VM) !VM.Value {
     try string.fields.putWithKeyObjectAuto("reverse", try NativeFunction.create(vm, &reverse));
     try string.fields.putWithKeyObjectAuto("format", try NativeFunction.create(vm, &format));
     try string.fields.putWithKeyObjectAuto("rep", try NativeFunction.create(vm, &rep));
-    // TODO: VERY BREAKING!!! WILL BE REPLACED WITH GMATCH WHEN PATTERNS ARE FULLY IMPLEMENTED
-    try string.fields.putWithKeyObjectAuto("pattern_test", try NativeFunction.create(vm, &pattern_test));
+    try string.fields.putWithKeyObjectAuto("gmatch", try NativeFunction.create(vm, &gmatch));
     return string.object.asValue();
 }
 
@@ -183,25 +182,34 @@ pub fn rep(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
 }
 
 // string.gmatch (s, pattern) - Returns an iterator that returns all occurrences of the pattern in the string s.
-pub fn pattern_test(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
+// TODO: A better implementation
+pub fn gmatch(vm: *VM, scope: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
     if (args.len < 2)
         return error.InvalidArgumentCount;
 
     const str = try args[0].asStringCastNum(vm.allocator);
     const pattern = try args[1].asStringCastNum(vm.allocator);
 
-    const compiled_pattern = try Pattern.make(vm.allocator, pattern);
-    //defer compiled_pattern.deinit();
-
     // for now, just print all characters that match the pattern
-    var pattern_iterator = Pattern.Iterator{
-        .pattern = compiled_pattern,
-        .subject = str,
-    };
+    try scope.internals.put(vm.allocator, "gmatch_iterator_pattern_idx", VM.Value.initNumber(0));
+    try scope.internals.put(vm.allocator, "gmatch_iterator_subject_idx", VM.Value.initNumber(0));
+    try scope.internals.put(vm.allocator, "gmatch_iterator_subject", (try VM.Object.ObjString.create(vm, str)).object.asValue());
+    try scope.internals.put(vm.allocator, "gmatch_iterator_pattern", (try VM.Object.ObjString.create(vm, pattern)).object.asValue());
 
-    while (try pattern_iterator.scan()) |item| {
-        std.debug.print("{s}\n", .{item});
-    }
+    return (try VM.Object.ObjNativeFunction.create(vm, gmatch_inner)).object.asValue();
+}
 
-    return VM.Value.initNil();
+fn gmatch_inner(vm: *VM, scope: *VM.Scope, _: []VM.Value) anyerror!VM.Value {
+    const subject_idx: usize = @intFromFloat((scope.internals.get("gmatch_iterator_subject_idx") orelse @panic("UB")).asNumber());
+    const pattern_idx: usize = @intFromFloat((scope.internals.get("gmatch_iterator_pattern_idx") orelse @panic("UB")).asNumber());
+    const subject: []const u8 = (scope.internals.get("gmatch_iterator_subject") orelse @panic("UB")).asObjectOfType(.String).value;
+    const pattern: []const u8 = (scope.internals.get("gmatch_iterator_pattern") orelse @panic("UB")).asObjectOfType(.String).value;
+
+    var pattern_iterator = Pattern.Iterator{ .pattern = try Pattern.make(vm.allocator, pattern), .subject = subject, .subject_ptr = subject_idx, .pattern_ptr = pattern_idx };
+
+    return if (try pattern_iterator.scan()) |match| v: {
+        try scope.internals.put(vm.allocator, "gmatch_iterator_subject_idx", VM.Value.initNumber(@floatFromInt(pattern_iterator.subject_ptr)));
+        try scope.internals.put(vm.allocator, "gmatch_iterator_pattern_idx", VM.Value.initNumber(@floatFromInt(pattern_iterator.pattern_ptr)));
+        break :v (try VM.Object.ObjString.create(vm, match)).object.asValue();
+    } else VM.Value.initNil();
 }
