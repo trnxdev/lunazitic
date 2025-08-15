@@ -191,25 +191,25 @@ pub fn gmatch(vm: *VM, scope: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
     const pattern = try args[1].asStringCastNum(vm.allocator);
 
     // for now, just print all characters that match the pattern
-    try scope.internals.put(vm.allocator, "gmatch_iterator_pattern_idx", VM.Value.initNumber(0));
-    try scope.internals.put(vm.allocator, "gmatch_iterator_subject_idx", VM.Value.initNumber(0));
-    try scope.internals.put(vm.allocator, "gmatch_iterator_subject", (try VM.Object.ObjString.create(vm, str)).object.asValue());
-    try scope.internals.put(vm.allocator, "gmatch_iterator_pattern", (try VM.Object.ObjString.create(vm, pattern)).object.asValue());
+    const pattern_iterator = Pattern.Iterator{
+        .pattern = try Pattern.make(vm.allocator, pattern),
+        .subject = str,
+    };
 
+    try scope.internals.put(
+        vm.allocator,
+        "gmatch_ptrniterator",
+        (try VM.Object.ObjNativeValue.create(vm, pattern_iterator)).object.asValue(),
+    );
     return (try VM.Object.ObjNativeFunction.create(vm, gmatch_inner)).object.asValue();
 }
 
 fn gmatch_inner(vm: *VM, scope: *VM.Scope, _: []VM.Value) anyerror!VM.Value {
-    const subject_idx: usize = @intFromFloat((scope.internals.get("gmatch_iterator_subject_idx") orelse @panic("UB")).asNumber());
-    const pattern_idx: usize = @intFromFloat((scope.internals.get("gmatch_iterator_pattern_idx") orelse @panic("UB")).asNumber());
-    const subject: []const u8 = (scope.internals.get("gmatch_iterator_subject") orelse @panic("UB")).asObjectOfType(.String).value;
-    const pattern: []const u8 = (scope.internals.get("gmatch_iterator_pattern") orelse @panic("UB")).asObjectOfType(.String).value;
+    const pattern_iterator_native_value = (scope.internals.get("gmatch_ptrniterator") orelse unreachable).asObjectOfType(.NativeValue);
+    const pattern_iterator: *Pattern.Iterator = @ptrFromInt(pattern_iterator_native_value.ptr);
 
-    var pattern_iterator = Pattern.Iterator{ .pattern = try Pattern.make(vm.allocator, pattern), .subject = subject, .subject_ptr = subject_idx, .pattern_ptr = pattern_idx };
-
-    return if (try pattern_iterator.scan()) |match| v: {
-        try scope.internals.put(vm.allocator, "gmatch_iterator_subject_idx", VM.Value.initNumber(@floatFromInt(pattern_iterator.subject_ptr)));
-        try scope.internals.put(vm.allocator, "gmatch_iterator_pattern_idx", VM.Value.initNumber(@floatFromInt(pattern_iterator.pattern_ptr)));
-        break :v (try VM.Object.ObjString.create(vm, match)).object.asValue();
-    } else VM.Value.initNil();
+    return if (try pattern_iterator.scan()) |match|
+        (try VM.Object.ObjString.create(vm, match)).object.asValue()
+    else
+        VM.Value.initNil();
 }

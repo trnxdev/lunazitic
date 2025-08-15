@@ -354,6 +354,7 @@ pub fn tostring_internal(value: Value, writer: std.io.AnyWriter) !void {
             .Closure => "function:c",
             .String => unreachable,
             .Tuple => "THIS_SHOULD_NOT_BE_PRINTED_tuple",
+            .NativeValue => "native_value"
         };
         try writer.print("{s}: 0x:{x}", .{ obj_type_str, @intFromPtr(obj) });
     } else if (value.isNumber()) {

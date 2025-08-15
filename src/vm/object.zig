@@ -8,6 +8,7 @@ obj_union: ObjObject,
 marked: bool = false,
 
 pub const ObjObject = union(enum) {
+    NativeValue: ObjNativeValue,
     Table: ObjTable,
     String: ObjString,
     Closure: ObjClosure,
@@ -21,6 +22,7 @@ pub const ObjObject = union(enum) {
             .String => (&self.String).deinit(allocator),
             .Closure => (&self.Closure).deinit(allocator),
             .Function => (&self.Function).deinit(allocator),
+            .NativeValue => (&self.NativeValue).deinit(),
             .NativeFunction => {},
             .Tuple => (&self.Tuple).deinit(allocator),
         }
@@ -30,6 +32,26 @@ pub const ObjObject = union(enum) {
 
     pub fn asValue(self: *@This()) VM.Value {
         return VM.Value.initObject(self);
+    }
+};
+
+pub const ObjNativeValue = struct {
+    object: *ObjObject,
+    ptr: usize,
+
+    pub fn create(vm: *VM, value: anytype) !*@This() {
+        const obj_native_value = try vm.allocateObject();
+        const ptr_val = try vm.allocator.create(@TypeOf(value));
+        ptr_val.* = value;
+        obj_native_value.* = .{ .NativeValue = .{
+            .object = obj_native_value,
+            .ptr = @intFromPtr(ptr_val),
+        } };
+        return &obj_native_value.NativeValue;
+    }
+
+    pub fn deinit(_: *@This()) void {
+        // TODO
     }
 };
 
