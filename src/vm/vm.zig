@@ -107,6 +107,11 @@ pub fn init(
     string_table.* = ((try std_string.init(vm)).asObjectOfType(.Table)).*;
     try vm.global_vars.fields.putWithKeyObjectAuto("string", string_table.*);
 
+    // Initialize other primitive metatables to empty tables
+    vm.metatables_for_primitives[@intFromEnum(MpType.Number)] = (try Object.ObjTable.create(vm)).*;
+    vm.metatables_for_primitives[@intFromEnum(MpType.Bool)] = (try Object.ObjTable.create(vm)).*;
+    vm.metatables_for_primitives[@intFromEnum(MpType.Nil)] = (try Object.ObjTable.create(vm)).*;
+
     // Table STD
     const table = try std_table.init(vm);
     try vm.global_vars.fields.putWithKey("table", table);

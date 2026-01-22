@@ -4,7 +4,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const use_gpa = b.option(bool, "use-gpa", "Use the General Purpose Allocator") orelse (optimize == .Debug);
-    const debug_gc = b.option(bool, "debug-gc", "Enable GC debug logging") orelse (optimize == .Debug);
+    const debug_gc = b.option(bool, "debug-gc", "Enable GC debug logging") orelse (optimize != .Debug);
 
     const root_module = b.addModule("lunazitic", .{
         .root_source_file = b.path("src/binary.zig"),
