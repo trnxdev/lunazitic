@@ -43,7 +43,7 @@ pub fn doString(self: *API, string: []const u8) !?Value {
     root_scope.* = .{};
 
     const closure = try self.compileStringToClosure(string);
-    // defer closure.object.deinit(self.allocator);
+    defer closure.object.deinit(self.allocator);
 
     self.vm.global_symbol_map = self.compiler.global_symbol_map.items;
 

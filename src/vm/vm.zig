@@ -9,6 +9,7 @@ const std_string = @import("./std/string.zig");
 const std_table = @import("./std/table.zig");
 const Parser = @import("../parser.zig");
 const Compiler = @import("compiler.zig");
+const build_options = @import("build_options");
 
 allocator: std.mem.Allocator,
 global_vars: *Object.ObjTable,
@@ -23,6 +24,13 @@ internals: struct {
     rng: std.Random.Xoshiro256,
 },
 values: std.ArrayListUnmanaged(*Object.ObjObject),
+gc_marked: std.AutoHashMap(*Object.ObjObject, void),
+gc_gray: std.ArrayListUnmanaged(*Object.ObjObject) = .empty,
+gc_threshold: usize = 1024,
+gc_needed: bool = false,
+current_scope_index: usize = 0,
+current_scope: ?*Scope = null,
+current_closure: ?*Object.ObjClosure = null,
 scopes: [std.math.maxInt(u8)]Scope = undefined,
 global_symbol_map: []const Compiler.KstringVSymbol = &.{},
 save: [255]Value = undefined,
@@ -80,6 +88,7 @@ pub fn init(
         .allocator = allocator,
         .string_pool = std.StringHashMap(*Object.ObjString).init(allocator),
         .values = .{},
+        .gc_marked = std.AutoHashMap(*Object.ObjObject, void).init(allocator),
     };
     vm.internals.reference_to_next = try Object.ObjNativeFunction.create(vm, &next);
     vm.internals.reference_to_inner_ipairs = try Object.ObjNativeFunction.create(vm, &inner_ipairs);
@@ -125,6 +134,8 @@ pub fn deinit(self: *@This()) void {
     self.global_vars.object.deinit(self.allocator);
     self.string_pool.deinit();
     self.values.deinit(self.allocator);
+    self.gc_marked.deinit();
+    self.gc_gray.deinit(self.allocator);
     self.allocator.destroy(self);
 }
 
@@ -134,6 +145,10 @@ pub fn errorFmt(_: *@This(), err: anyerror, comptime log_fmt: []const u8, log_ar
 }
 
 pub fn allocateObject(self: *@This()) !*Object.ObjObject {
+    // Mark that GC is needed - it will be triggered at a safe point
+    if (self.values.items.len >= self.gc_threshold)
+        self.gc_needed = true;
+
     const ptr = try self.allocator.create(Object.ObjObject);
     try self.values.append(self.allocator, ptr);
     return ptr;
@@ -414,8 +429,25 @@ pub fn assert(vm: *VM, scope: *Scope, args: []Value) anyerror!Value {
 }
 
 pub fn runClosure(self: *@This(), closure: *Object.ObjClosure, scope: *Scope) anyerror!void {
+    const prev_closure = self.current_closure;
+    const prev_scope = self.current_scope;
+    const prev_scope_index = self.current_scope_index;
+    self.current_closure = closure;
+    self.current_scope = scope;
+    self.current_scope_index = scope.index;
+    defer {
+        self.current_closure = prev_closure;
+        self.current_scope = prev_scope;
+        self.current_scope_index = prev_scope_index;
+    }
     o: while (scope.pc < closure.func.instructions.len) {
         try @call(.always_inline, runInstr, .{ self, closure.func.instructions[scope.pc], closure, scope });
+
+        // Safe point: trigger GC after instruction completes (no hash maps are locked)
+        if (self.gc_needed) {
+            self.gc_needed = false;
+            try self.collectGarbage();
+        }
 
         if (scope.exit == .NaturalEnd)
             scope.exit = .None;
@@ -448,6 +480,7 @@ pub fn newScope(self: *@This(), scope: *Scope) !*Scope {
     const new_scope: *Scope = &self.scopes[scope.index + 1];
     new_scope.* = .{};
     new_scope.index = scope.index + 1;
+    self.current_scope_index = new_scope.index;
     return new_scope;
 }
 
@@ -456,6 +489,7 @@ pub fn newScopeInherit(self: *@This(), scope: *Scope) !*Scope {
     const new_scope: *Scope = &self.scopes[scope.index + 1];
     new_scope.index = scope.index + 1;
     new_scope.varargs = scope.varargs;
+    self.current_scope_index = new_scope.index;
     return new_scope;
 }
 
@@ -465,6 +499,12 @@ pub fn destroyScope(self: *@This(), scope: *Scope) void {
     scope.exit = .None;
     scope.return_slot = null;
 
+    scope.internals.deinit(self.allocator);
+    scope.internals = .empty;
+
+    for (&scope.locals) |*local| local.* = Value.initNil();
+    for (&scope.registers) |*reg| reg.* = Value.initNil();
+
     // if (scope.return_slot) |rs| {
     //    rs.deinit(self.allocator);
     //}
@@ -472,6 +512,9 @@ pub fn destroyScope(self: *@This(), scope: *Scope) void {
     if (scope.varargs) |va| {
         va.deinit(self.allocator);
     }
+
+    if (self.current_scope_index == scope.index and scope.index > 0)
+        self.current_scope_index = scope.index - 1;
 }
 
 pub inline fn getOperand(self: *@This(), op: Compiler.Instruction.Operand, closure: *Object.ObjClosure, scope: *Scope) Value {
@@ -883,4 +926,152 @@ pub fn resolveOperandListToBuf(self: *@This(), op_list: Compiler.Instruction.Ope
         buf[i] = self.getOperand(opr, closure, scope);
 
     return op_list.len;
+}
+
+pub fn collectGarbage(self: *@This()) !void {
+    if (build_options.@"debug-gc")
+        std.log.info("GC: start (objects={d}, threshold={d})", .{ self.values.items.len, self.gc_threshold });
+
+    self.gc_marked.clearRetainingCapacity();
+    self.gc_gray.clearRetainingCapacity();
+
+    try self.markObject(self.global_vars.object);
+    try self.markObject(self.internals.reference_to_next.object);
+    try self.markObject(self.internals.reference_to_inner_ipairs.object);
+
+    for (&self.metatables_for_primitives) |*metatable| {
+        try self.markObject(metatable.object);
+    }
+
+    if (self.current_closure) |closure|
+        try self.markObject(closure.object);
+
+    if (self.current_scope) |scope|
+        try self.markScope(scope);
+
+    for (self.scopes[0 .. self.current_scope_index + 1]) |*scope| {
+        try self.markScope(scope);
+    }
+
+    for (self.save[0..self.save_max]) |value| {
+        try self.markValue(value);
+    }
+
+    while (self.gc_gray.items.len > 0) {
+        const obj = self.gc_gray.items[self.gc_gray.items.len - 1];
+        _ = self.gc_gray.pop();
+        try self.traceObject(obj);
+    }
+
+    try self.sweep();
+
+    self.gc_marked.clearRetainingCapacity();
+    self.gc_threshold = @max(self.values.items.len * 2, 1024);
+
+    if (build_options.@"debug-gc")
+        std.log.info("GC: done (objects={d}, threshold={d})", .{ self.values.items.len, self.gc_threshold });
+}
+
+fn markValue(self: *@This(), value: Value) !void {
+    if (value.isObject())
+        try self.markObject(value.asObject());
+}
+
+fn markObject(self: *@This(), obj: *Object.ObjObject) !void {
+    if (@intFromPtr(obj) == 0)
+        return;
+
+    if (self.gc_marked.contains(obj))
+        return;
+
+    try self.gc_marked.put(obj, {});
+    try self.gc_gray.append(self.allocator, obj);
+}
+
+fn markScope(self: *@This(), scope: *Scope) !void {
+    if (scope.return_slot) |return_slot|
+        try self.markObject(return_slot.object);
+
+    if (scope.varargs) |varargs|
+        try self.markObject(varargs.object);
+
+    var iter = scope.internals.iterator();
+    while (iter.next()) |entry| {
+        try self.markValue(entry.value_ptr.*);
+    }
+
+    for (scope.locals) |value|
+        try self.markValue(value);
+
+    for (scope.registers) |value|
+        try self.markValue(value);
+}
+
+fn traceObject(self: *@This(), obj: *Object.ObjObject) !void {
+    if (@intFromPtr(obj) == 0)
+        return;
+
+    switch (obj.*) {
+        .Table => |*table| {
+            if (table.metatable) |metatable|
+                try self.markObject(metatable.object);
+
+            for (table.fields.array_part.items) |value|
+                try self.markValue(value);
+
+            var hash_iter = table.fields.hash_part.iterator();
+            while (hash_iter.next()) |entry| {
+                try self.markValue(entry.key_ptr.*);
+                try self.markValue(entry.value_ptr.*);
+            }
+
+            var string_iter = table.fields.string_part.iterator();
+            while (string_iter.next()) |entry| {
+                try self.markValue(entry.value_ptr.*);
+                if (self.string_pool.get(entry.key_ptr.*)) |string_obj|
+                    try self.markObject(string_obj.object);
+            }
+        },
+        .String => {},
+        .Tuple => |*tuple| {
+            for (tuple.values) |value|
+                try self.markValue(value);
+        },
+        .Function => |*func| {
+            for (func.constants) |value|
+                try self.markValue(value);
+        },
+        .Closure => |*closure| {
+            try self.markObject(closure.func.object);
+            if (closure.defined_in_scope) |scope|
+                try self.markScope(scope);
+            for (closure.upvalues) |upvalue|
+                try self.markValue(upvalue.*);
+        },
+        .NativeFunction => {},
+        .NativeValue => {},
+    }
+}
+
+fn sweep(self: *@This()) !void {
+    var survivors: std.ArrayListUnmanaged(*Object.ObjObject) = .empty;
+    var freed: usize = 0;
+
+    for (self.values.items) |obj| {
+        if (self.gc_marked.contains(obj)) {
+            try survivors.append(self.allocator, obj);
+            continue;
+        }
+
+        if (obj.* == .String) {
+            _ = self.string_pool.remove(obj.String.value);
+        }
+
+        obj.deinit(self.allocator);
+        freed += 1;
+    }
+
+    self.values.deinit(self.allocator);
+    self.values = survivors;
+    std.log.info("GC: swept {d} objects", .{freed});
 }

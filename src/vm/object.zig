@@ -4,9 +4,6 @@ const AST = @import("../ast.zig");
 const Compiler = @import("compiler.zig");
 const Value = @import("value.zig");
 
-obj_union: ObjObject,
-marked: bool = false,
-
 pub const ObjObject = union(enum) {
     NativeValue: ObjNativeValue,
     Table: ObjTable,
@@ -22,7 +19,7 @@ pub const ObjObject = union(enum) {
             .String => (&self.String).deinit(allocator),
             .Closure => (&self.Closure).deinit(allocator),
             .Function => (&self.Function).deinit(allocator),
-            .NativeValue => (&self.NativeValue).deinit(),
+            .NativeValue => (&self.NativeValue).deinit(allocator),
             .NativeFunction => {},
             .Tuple => (&self.Tuple).deinit(allocator),
         }
@@ -37,7 +34,8 @@ pub const ObjObject = union(enum) {
 
 pub const ObjNativeValue = struct {
     object: *ObjObject,
-    ptr: usize,
+    ptr: *anyopaque,
+    deinit_fn: ?*const fn (allocator: std.mem.Allocator, ptr: *anyopaque) void = null,
 
     pub fn create(vm: *VM, value: anytype) !*@This() {
         const obj_native_value = try vm.allocateObject();
@@ -45,13 +43,28 @@ pub const ObjNativeValue = struct {
         ptr_val.* = value;
         obj_native_value.* = .{ .NativeValue = .{
             .object = obj_native_value,
-            .ptr = @intFromPtr(ptr_val),
+            .ptr = ptr_val,
+            .deinit_fn = deinitFor(@TypeOf(value)),
         } };
         return &obj_native_value.NativeValue;
     }
 
-    pub fn deinit(_: *@This()) void {
-        // TODO
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        if (self.deinit_fn) |deinit_fn|
+            deinit_fn(allocator, self.ptr);
+    }
+
+    pub fn asPtr(self: *@This(), comptime T: type) *T {
+        return @ptrCast(@alignCast(self.ptr));
+    }
+
+    fn deinitFor(comptime T: type) *const fn (allocator: std.mem.Allocator, ptr: *anyopaque) void {
+        return struct {
+            fn inner(allocator: std.mem.Allocator, ptr: *anyopaque) void {
+                const typed_ptr: *T = @ptrCast(@alignCast(ptr));
+                allocator.destroy(typed_ptr);
+            }
+        }.inner;
     }
 };
 
@@ -321,6 +334,7 @@ pub const ObjFunction = struct {
     params: []const []const u8,
     var_arg: bool = false,
     locals: u8 = 0,
+    ref_count: usize = 0,
     upvalues: []const Compiler.UpvalueData = &.{},
     instructions: []const Compiler.Instruction = &.{},
     constants: []const Value = &.{},
@@ -344,6 +358,7 @@ pub const ObjFunction = struct {
             .name = name,
             .params = if (params) |p| p else &.{},
             .var_arg = var_arg,
+            .ref_count = 0,
         } };
         return &obj_function.Function;
     }
@@ -355,14 +370,30 @@ pub const ObjFunction = struct {
             .name = name,
             .params = if (params) |p| p else &.{},
             .var_arg = var_arg,
+            .ref_count = 0,
         } };
         return &obj_function.Function;
     }
 
     pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        for (self.instructions) |instr| {
+            switch (instr) {
+                .call_func_args => |call_args| allocator.free(call_args.args),
+                .unwrap_tuple_save => |operand_list| allocator.free(operand_list),
+                else => {},
+            }
+        }
+
         for (self.constants) |c| {
-            if (c.isObject())
-                c.asObject().deinit(allocator);
+            if (c.isObject()) {
+                if (c.isObjectOfType(.Function)) {
+                    const func = c.asObjectOfType(.Function);
+                    if (func.ref_count == 0)
+                        c.asObject().deinit(allocator);
+                } else {
+                    c.asObject().deinit(allocator);
+                }
+            }
         }
 
         if (self.constants.len > 0)
@@ -397,6 +428,8 @@ pub const ObjClosure = struct {
             .defined_in_scope = def_in_scope,
         } };
 
+        func.ref_count += 1;
+
         for (obj_closure.Closure.upvalues) |*upvalue| upvalue.* = undefined;
 
         return &obj_closure.Closure;
@@ -415,6 +448,8 @@ pub const ObjClosure = struct {
             .defined_in_scope = def_in_scope,
         } };
 
+        func.ref_count += 1;
+
         for (obj_closure.Closure.upvalues) |*upvalue| upvalue.* = undefined;
         for (obj_closure.Closure.upvalues) |upvalue| upvalue.* = Value.initNil();
 
@@ -422,7 +457,11 @@ pub const ObjClosure = struct {
     }
 
     pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-        self.func.object.deinit(allocator);
+        if (self.func.ref_count > 0) {
+            self.func.ref_count -= 1;
+            if (self.func.ref_count == 0)
+                self.func.object.deinit(allocator);
+        }
         allocator.free(self.upvalues);
     }
 };

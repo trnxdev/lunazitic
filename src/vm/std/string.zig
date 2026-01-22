@@ -206,7 +206,7 @@ pub fn gmatch(vm: *VM, scope: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
 
 fn gmatch_inner(vm: *VM, scope: *VM.Scope, _: []VM.Value) anyerror!VM.Value {
     const pattern_iterator_native_value = (scope.internals.get("gmatch_ptrniterator") orelse unreachable).asObjectOfType(.NativeValue);
-    const pattern_iterator: *Pattern.Iterator = @ptrFromInt(pattern_iterator_native_value.ptr);
+    const pattern_iterator: *Pattern.Iterator = pattern_iterator_native_value.asPtr(Pattern.Iterator);
 
     return if (try pattern_iterator.scan()) |match|
         (try VM.Object.ObjString.create(vm, match)).object.asValue()

@@ -162,6 +162,7 @@ const Worker = struct {
     reg_allocated: [Instruction.MaxReg]bool = [_]bool{false} ** Instruction.MaxReg,
     instructions: std.ArrayListUnmanaged(Instruction) = .empty,
     constants: std.ArrayListUnmanaged(Value) = .empty,
+    owned_empty_keys: std.ArrayListUnmanaged([]const u8) = .empty,
 
     pub fn lastInstructionProducedTuple(self: *@This()) bool {
         return self.instructions.items.len > 0 and self.instructions.items[self.instructions.items.len - 1] == .call_func;
@@ -184,7 +185,9 @@ const Worker = struct {
         const map = &self.symbol_map;
         // TODO: free this
         const new_index = map.count();
-        const gop = try map.getOrPut(self.allocator, try std.fmt.allocPrint(self.allocator, "\x00{d}", .{map.count()}));
+        const key = try std.fmt.allocPrint(self.allocator, "\x00{d}", .{map.count()});
+        try self.owned_empty_keys.append(self.allocator, key);
+        const gop = try map.getOrPut(self.allocator, key);
 
         if (!gop.found_existing) {
             if (new_index > std.math.maxInt(Instruction.Symbol))
@@ -256,6 +259,10 @@ const Worker = struct {
 
     pub fn deinit(self: *@This()) void {
         self.symbol_map.deinit(self.allocator);
+        for (self.owned_empty_keys.items) |key| {
+            self.allocator.free(key);
+        }
+        self.owned_empty_keys.deinit(self.allocator);
         self.upvalues.deinit(self.allocator);
         self.instructions.deinit(self.allocator);
         self.constants.deinit(self.allocator);
@@ -477,6 +484,9 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
                     },
                 }
             }
+
+            if (!has_tuple)
+                self.allocator.free(ops);
         },
         .LocalVarDecl => |lvd| {
             const exps: []*AST.Exp = lvd.Exps orelse {
@@ -530,6 +540,9 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
                     .copy = .{ .src = operand, .dest = .{ .local = local_data.symbol } },
                 });
             }
+
+            if (!has_tuple)
+                self.allocator.free(rgs);
         },
         .While => |wh| {
             const begin = worker.instructions.items.len;
@@ -555,14 +568,16 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
             }
 
             //   const remove_point = worker.instructions.items.len;
-            const temp = worker.symbol_map;
+            const previous_symbol_map = worker.symbol_map;
             worker.symbol_map = try worker.symbol_map.clone(self.allocator);
+            defer {
+                worker.symbol_map.deinit(self.allocator);
+                worker.symbol_map = previous_symbol_map;
+            }
 
             for (wh.Block) |innerstat| {
                 try self.compileStat(innerstat.*, worker);
             }
-
-            worker.symbol_map = temp;
 
             try worker.instructions.append(self.allocator, Instruction{
                 .jump = begin,
