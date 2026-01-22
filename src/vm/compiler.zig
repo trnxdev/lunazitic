@@ -329,9 +329,8 @@ pub fn compileRoot(self: *@This(), root: AST.Block) anyerror!*Object.ObjClosure 
 }
 
 pub fn compileBlock(self: *@This(), block: AST.Block, worker: *Worker) anyerror!void {
-    for (block) |stat| {
-        std.debug.print("STAT: {}\n", .{stat});
-        try self.compileStat(stat.*, worker);
+    for (block) |statement| {
+        try self.compileStat(statement.*, worker);
     }
 }
 
@@ -1084,39 +1083,39 @@ pub fn startTable(self: *@This(), worker: *Worker) !Instruction.Operand {
 
 // If need_output is false, then the result is 0
 pub fn funcCall(self: *@This(), fc: AST.FunctionCall, worker: *Worker, comptime need_output: bool) anyerror!?Instruction.Operand {
-    var reg_args: std.ArrayListUnmanaged(Instruction.Operand) = .empty;
-    defer reg_args.deinit(self.allocator);
+    var argument_regs: std.ArrayListUnmanaged(Instruction.Operand) = .empty;
+    defer argument_regs.deinit(self.allocator);
 
     if (fc.Method) |_| {
-        // No need to free, since it's done in final_reg_args
+        // No need to free, since it's done in final_args
         const inner_prefix = try self.compilePrefix(fc.Prefix.*, worker);
-        try reg_args.append(self.allocator, inner_prefix);
+        try argument_regs.append(self.allocator, inner_prefix);
     }
 
-    var has_tuple: bool = false;
+    var has_tuple_result: bool = false;
 
     switch (fc.Args) {
         .Explist => |exp_list| {
             for (exp_list) |exp| {
-                try reg_args.append(self.allocator, try self.compileExp(exp.*, worker));
+                try argument_regs.append(self.allocator, try self.compileExp(exp.*, worker));
 
                 if (worker.lastInstructionProducedTuple())
-                    has_tuple = true;
+                    has_tuple_result = true;
             }
         },
         .String => |str| {
-            try reg_args.append(self.allocator, try self.fetchString(worker, str));
+            try argument_regs.append(self.allocator, try self.fetchString(worker, str));
         },
         else => @panic("TODO"),
     }
 
-    const final_reg_args = try reg_args.toOwnedSlice(self.allocator);
-    defer for (final_reg_args) |fra| worker.freeReg(fra);
+    const final_args = try argument_regs.toOwnedSlice(self.allocator);
+    defer for (final_args) |arg_reg| worker.freeReg(arg_reg);
 
-    const dest = try worker.allocateReg();
-    if (!need_output) worker.freeReg(dest);
+    const result_reg = try worker.allocateReg();
+    if (!need_output) worker.freeReg(result_reg);
 
-    const prefix = if (fc.Method) |method|
+    const callee = if (fc.Method) |method|
         try self.compilePrefix(.{ .Var = .{ .DotAccess = .{
             .Key = method,
             .Prefix = fc.Prefix,
@@ -1124,22 +1123,22 @@ pub fn funcCall(self: *@This(), fc: AST.FunctionCall, worker: *Worker, comptime 
     else
         try self.compilePrefix(fc.Prefix.*, worker);
 
-    if (final_reg_args.len > 255)
+    if (final_args.len > 255)
         return error.TooManyFunctionArguments;
 
     try worker.instructions.append(self.allocator, Instruction{
         .call_func_args = .{
-            .args = final_reg_args,
-            .has_tuple = if (has_tuple) .Yes else .No,
+            .args = final_args,
+            .has_tuple = if (has_tuple_result) .Yes else .No,
         },
     });
     try worker.instructions.append(self.allocator, Instruction{ .call_func = .{
-        .func = prefix,
-        .dest = dest,
+        .func = callee,
+        .dest = result_reg,
     } });
-    worker.freeReg(prefix);
+    worker.freeReg(callee);
 
-    return if (need_output) dest else null;
+    return if (need_output) result_reg else null;
 }
 
 pub fn addUpvalue(self: *@This(), worker: *Worker, symbol: Instruction.Symbol, is_local: bool) !Instruction.Symbol {

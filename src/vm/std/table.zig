@@ -4,14 +4,14 @@ const VM = @import("../vm.zig");
 const NativeFunction = VM.Object.ObjNativeFunction;
 
 pub fn init(vm: *VM) !VM.Value {
-    const table = try VM.Object.ObjTable.create(vm);
+    const table_obj = try VM.Object.ObjTable.create(vm);
     // Function table.setn was deprecated.
     // Function table.getn corresponds to the new length operator (#);
     // use the operator instead of the function.
     // (See compile-time option LUA_COMPAT_GETN in luaconf.h.)
-    try table.fields.putWithKeyObjectAuto("getn", try NativeFunction.create(vm, &getn));
-    try table.fields.putWithKeyObjectAuto("concat", try NativeFunction.create(vm, &concat));
-    return table.object.asValue();
+    try table_obj.fields.putWithKeyObjectAuto("getn", try NativeFunction.create(vm, &getn));
+    try table_obj.fields.putWithKeyObjectAuto("concat", try NativeFunction.create(vm, &concat));
+    return table_obj.object.asValue();
 }
 
 pub fn getn(_: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
@@ -37,16 +37,16 @@ pub fn concat(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
     if (!args[0].isObjectOfType(.Table))
         return error.BadArgument;
 
-    const table: *VM.Object.ObjTable = args[0].asObjectOfType(.Table);
+    const table_obj: *VM.Object.ObjTable = args[0].asObjectOfType(.Table);
 
-    var res = std.ArrayList(u8).empty;
-    defer res.deinit(vm.allocator);
+    var output = std.ArrayList(u8).empty;
+    defer output.deinit(vm.allocator);
 
-    for (table.fields.array_part.items) |item| {
+    for (table_obj.fields.array_part.items) |item| {
         if (item.isNil()) continue;
         const value = item.asObjectOfType(.String).value;
-        try res.appendSlice(vm.allocator, value);
+        try output.appendSlice(vm.allocator, value);
     }
 
-    return (try VM.Object.ObjString.createMoved(vm, try res.toOwnedSlice(vm.allocator))).object.asValue();
+    return (try VM.Object.ObjString.createMoved(vm, try output.toOwnedSlice(vm.allocator))).object.asValue();
 }

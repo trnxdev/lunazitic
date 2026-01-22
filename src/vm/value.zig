@@ -38,18 +38,18 @@ pub fn asNumber(self: Value) f64 {
     return @bitCast(self.data);
 }
 
-const NumberAllowCastsFrom = packed struct {
+const NumberCastOptions = packed struct {
     string: bool = true,
     tuple: bool = false,
 };
-pub fn asNumberCast(self: Value, allow_casts_from: NumberAllowCastsFrom) !f64 {
+pub fn asNumberCast(self: Value, cast_options: NumberCastOptions) !f64 {
     if (@call(.always_inline, isNumber, .{self}))
         return self.asNumber();
 
-    if (self.isObjectOfType(.Tuple) and allow_casts_from.tuple)
-        return try self.asObjectOfType(.Tuple).values[0].asNumberCast(allow_casts_from);
+    if (self.isObjectOfType(.Tuple) and cast_options.tuple)
+        return try self.asObjectOfType(.Tuple).values[0].asNumberCast(cast_options);
 
-    if (self.isObjectOfType(.String) and allow_casts_from.string)
+    if (self.isObjectOfType(.String) and cast_options.string)
         return try std.fmt.parseFloat(f64, self.asObjectOfType(.String).value);
 
     return error.Uncastable;

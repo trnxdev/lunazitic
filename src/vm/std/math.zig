@@ -218,11 +218,11 @@ pub fn makeSimpleMathFunc(func: fn (f64) f64) fn (*VM, *VM.Scope, []VM.Value) an
             if (args.len < 1)
                 return error.InvalidArgumentCount;
 
-            const num = try args[0].asNumberCast(.{
+            const value = try args[0].asNumberCast(.{
                 .string = true,
             });
 
-            return VM.Value.initNumber(func(num));
+            return VM.Value.initNumber(func(value));
         }
     }.innerfunc;
 }
@@ -233,14 +233,14 @@ pub fn makeSimpleMathFunc2Args(func: fn (f64, f64) f64) fn (*VM, *VM.Scope, []VM
             if (args.len < 2)
                 return error.InvalidArgumentCount;
 
-            const num = try args[0].asNumberCast(.{
+            const value = try args[0].asNumberCast(.{
                 .string = true,
             });
-            const num2 = try args[1].asNumberCast(.{
+            const value2 = try args[1].asNumberCast(.{
                 .string = true,
             });
 
-            return VM.Value.initNumber(func(num, num2));
+            return VM.Value.initNumber(func(value, value2));
         }
     }.innerfunc;
 }
@@ -249,17 +249,17 @@ pub fn makeSimpleMathFuncInfArgs(func: fn ([]const f64) f64) fn (*VM, *VM.Scope,
     return struct {
         fn innerfunc(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
             // FIXME: Max args is 255? Maybe dont allocate in memory
-            var nums = std.ArrayList(f64).empty;
-            defer nums.deinit(vm.allocator);
+            var values = std.ArrayList(f64).empty;
+            defer values.deinit(vm.allocator);
 
             for (args) |arg| {
-                const num = try arg.asNumberCast(.{
+                const value = try arg.asNumberCast(.{
                     .string = true,
                 });
-                try nums.append(vm.allocator, (num));
+                try values.append(vm.allocator, value);
             }
 
-            return VM.Value.initNumber(func(nums.items));
+            return VM.Value.initNumber(func(values.items));
         }
     }.innerfunc;
 }

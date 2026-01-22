@@ -72,15 +72,15 @@ pub fn read(self: *@This()) !Token {
 
 pub fn readToArrayUntilEOF(self: *@This(), dest: *std.ArrayList(Token)) !void {
     var token: Token = Token{ .kind = .EOF };
-    var first_iteration: bool = true;
+    var is_first_iteration: bool = true;
 
-    o: while (first_iteration or token.kind != .EOF) : (token = try self.read()) {
-        if (first_iteration) {
-            first_iteration = false;
+    o: while (is_first_iteration or token.kind != .EOF) : (token = try self.read()) {
+        if (is_first_iteration) {
+            is_first_iteration = false;
             continue :o;
         }
 
-        try dest.append(self.allocator, (token));
+        try dest.append(self.allocator, token);
     }
 }
 
@@ -173,11 +173,9 @@ pub fn isEOF(self: @This()) bool {
     return self.location.offset >= self.buffer.len;
 }
 
-const OuterSelf = @This();
-
 fn numberToken(self: *@This()) !Token {
-    var num_literal = std.ArrayList(u8).empty;
-    defer num_literal.deinit(self.allocator);
+    var number_literal = std.ArrayList(u8).empty;
+    defer number_literal.deinit(self.allocator);
 
     var is_hexadecimal: bool = false;
     var is_float: bool = false;
@@ -190,14 +188,14 @@ fn numberToken(self: *@This()) !Token {
         is_hexadecimal = true;
 
         // == Hexadecimal
-        try num_literal.appendSlice(self.allocator, "0x");
+        try number_literal.appendSlice(self.allocator, "0x");
     }
 
     while (true) : (_ = self.advance()) {
         if (is_hexadecimal and isHexadecimalLike(self.peek()))
-            try num_literal.append(self.allocator, (self.peek()))
+            try number_literal.append(self.allocator, self.peek())
         else if (!is_hexadecimal and std.ascii.isDigit(self.peek()))
-            try num_literal.append(self.allocator, (self.peek()))
+            try number_literal.append(self.allocator, self.peek())
         else
             break;
     }
@@ -207,13 +205,13 @@ fn numberToken(self: *@This()) !Token {
 
     if (self.match(".")) {
         is_float = true;
-        try num_literal.append(self.allocator, ('.'));
+        try number_literal.append(self.allocator, '.');
 
         while (true) : (_ = self.advance()) {
             if (is_hexadecimal and isHexadecimalLike(self.peek()))
-                try num_literal.append(self.allocator, (self.peek()))
+                try number_literal.append(self.allocator, self.peek())
             else if (!is_hexadecimal and std.ascii.isDigit(self.peek()))
-                try num_literal.append(self.allocator, (self.peek()))
+                try number_literal.append(self.allocator, self.peek())
             else
                 break;
         }
@@ -224,24 +222,24 @@ fn numberToken(self: *@This()) !Token {
     or (!is_hexadecimal and self.match("E") or self.match("e"))) {
     // zig fmt: on
         has_exponent = true;
-        try num_literal.append(self.allocator, (std.ascii.toUpper(self.buffer[self.location.offset - 1])));
+        try number_literal.append(self.allocator, std.ascii.toUpper(self.buffer[self.location.offset - 1]));
 
         if (self.match("-"))
-            try num_literal.append(self.allocator, ('-'))
+            try number_literal.append(self.allocator, '-')
         else if (self.match("+"))
-            try num_literal.append(self.allocator, ('+'));
+            try number_literal.append(self.allocator, '+');
 
         while (true) : (_ = self.advance()) {
             if (is_hexadecimal and isHexadecimalLike(self.peek()))
-                try num_literal.append(self.allocator, (self.peek()))
+                try number_literal.append(self.allocator, self.peek())
             else if (!is_hexadecimal and std.ascii.isDigit(self.peek()))
-                try num_literal.append(self.allocator, (self.peek()))
+                try number_literal.append(self.allocator, self.peek())
             else
                 break;
         }
     }
 
-    return self.createTokenIL(.Number, try num_literal.toOwnedSlice(self.allocator));
+    return self.createTokenIL(.Number, try number_literal.toOwnedSlice(self.allocator));
 }
 
 fn match(self: *@This(), to_match: []const u8) bool {
@@ -316,10 +314,10 @@ fn stringToken(self: *@This(), string_type: LuaStringType) StringLiteralTokenErr
                 return error.UnterminatedString;
 
             if (char == '\\') {
-                const escaping_char = self.advance();
+                const escaped_char = self.advance();
 
                 // 3.1 - Lexical Conventions (https://www.lua.org/manual/5.4/manual.html#3)
-                switch (escaping_char) {
+                switch (escaped_char) {
                     'a' => try output.append(self.allocator, std.ascii.control_code.bel), // Bell)
                     'b' => try output.append(self.allocator, std.ascii.control_code.bs), // Backspace)
                     'f' => try output.append(self.allocator, std.ascii.control_code.ff), // Form Feed)
@@ -372,7 +370,7 @@ fn stringToken(self: *@This(), string_type: LuaStringType) StringLiteralTokenErr
                             16,
                         );
 
-                        try output.append(self.allocator, (hexadecimal_char));
+                        try output.append(self.allocator, hexadecimal_char);
                     },
                     '0'...'9' => {
                         const start = self.location.offset - 1;
@@ -387,7 +385,7 @@ fn stringToken(self: *@This(), string_type: LuaStringType) StringLiteralTokenErr
                             self.buffer[start..self.location.offset],
                             10,
                         );
-                        try output.append(self.allocator, (ascii_char));
+                        try output.append(self.allocator, ascii_char);
                     },
                     else => return error.InvalidEscapeChar,
                 }
@@ -396,7 +394,7 @@ fn stringToken(self: *@This(), string_type: LuaStringType) StringLiteralTokenErr
             }
         }
 
-        try output.append(self.allocator, (char));
+        try output.append(self.allocator, char);
     }
 
     return self.createTokenIL(.String, try output.toOwnedSlice(self.allocator));

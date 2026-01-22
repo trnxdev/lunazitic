@@ -1,14 +1,9 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const Compiler = @import("./vm/compiler.zig");
-const jdz = @import("jdz");
-const build_options = @import("build_options");
-const Token = @import("token.zig");
 const TokenStream = @import("token_stream.zig");
 const Parser = @import("parser.zig");
 const VM = @import("./vm/vm.zig");
 const Object = @import("./vm/object.zig");
-const AST = @import("ast.zig");
 
 pub const Value = VM.Value;
 pub const API = @This();
@@ -44,17 +39,17 @@ pub fn deinit(self: *API) void {
 }
 
 pub fn doString(self: *API, string: []const u8) !?Value {
-    const scope = &self.vm.scopes[0];
-    scope.* = .{};
+    const root_scope = &self.vm.scopes[0];
+    root_scope.* = .{};
 
     const closure = try self.compileStringToClosure(string);
     // defer closure.object.deinit(self.allocator);
 
     self.vm.global_symbol_map = self.compiler.global_symbol_map.items;
 
-    try self.vm.runClosure(closure, scope);
+    try self.vm.runClosure(closure, root_scope);
 
-    if (scope.return_slot) |rs| {
+    if (root_scope.return_slot) |rs| {
         if (rs.values.len > 1)
             return rs.object.asValue();
 
@@ -65,14 +60,14 @@ pub fn doString(self: *API, string: []const u8) !?Value {
 }
 
 pub fn doFile(self: *API, path: []const u8) !?Value {
-    const file_content = try std.fs.cwd().readFileAlloc(
+    const file_contents = try std.fs.cwd().readFileAlloc(
         self.allocator,
         path,
         std.math.maxInt(usize),
     );
-    defer self.allocator.free(file_content);
+    defer self.allocator.free(file_contents);
 
-    return self.doString(file_content);
+    return self.doString(file_contents);
 }
 
 pub fn compileStringToClosure(self: *API, string: []const u8) !*Object.ObjClosure {

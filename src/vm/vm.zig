@@ -323,17 +323,19 @@ pub fn print(vm: *VM, scope: *Scope, args: []const Value) anyerror!Value {
     _ = scope;
     var buffer: [1024]u8 = undefined;
     const stdout = std.fs.File.stdout();
-    var buffered_out = stdout.writer(&buffer);
-    var out = &buffered_out.interface;
+    var buffered_stdout = stdout.writer(&buffer);
+    var stdout_writer = &buffered_stdout.interface;
 
     for (args, 0..) |arg, i| {
-        try tostring_internal(arg, out);
+        try tostring_internal(arg, stdout_writer);
+
         if (i + 1 < args.len)
-            try out.writeAll("\t");
+            try stdout_writer.writeAll("\t");
     }
 
-    try out.writeAll("\n");
-    try out.flush();
+    try stdout_writer.writeAll("\n");
+    try stdout_writer.flush();
+
     return Value.initNil();
 }
 
@@ -377,11 +379,11 @@ pub fn tostring(vm: *VM, _: *Scope, args: []const Value) anyerror!Value {
         return (try Object.ObjString.create(vm, arg.asObjectOfType(.String).value)).object.asValue();
     }
 
-    var buf: std.ArrayList(u8) = .empty;
-    var wrd = buf.writer(vm.allocator).adaptToNewApi(&.{}).new_interface;
-    try tostring_internal(arg, &wrd);
+    var buffer: std.ArrayList(u8) = .empty;
+    var writer = buffer.writer(vm.allocator).adaptToNewApi(&.{}).new_interface;
+    try tostring_internal(arg, &writer);
 
-    return (try Object.ObjString.createMoved(vm, try buf.toOwnedSlice(vm.allocator))).object.asValue();
+    return (try Object.ObjString.createMoved(vm, try buffer.toOwnedSlice(vm.allocator))).object.asValue();
 }
 
 pub fn assert(vm: *VM, scope: *Scope, args: []Value) anyerror!Value {

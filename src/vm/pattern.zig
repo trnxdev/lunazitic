@@ -131,36 +131,36 @@ start_anchor: bool, // true if the pattern starts with ^
 end_anchor: bool, // true if the pattern ends with $
 
 pub fn make(allocator: std.mem.Allocator, given_pattern: []const u8) !@This() {
-    var pattern = given_pattern;
+    var pattern_text = given_pattern;
 
-    var items = std.ArrayList(Item).empty;
-    defer items.deinit(allocator);
+    var pattern_items = std.ArrayList(Item).empty;
+    defer pattern_items.deinit(allocator);
 
-    const start_anchor = pattern.len > 0 and pattern[0] == '^';
-    const end_anchor = pattern.len > 0 and pattern[pattern.len - 1] == '$';
+    const start_anchor = pattern_text.len > 0 and pattern_text[0] == '^';
+    const end_anchor = pattern_text.len > 0 and pattern_text[pattern_text.len - 1] == '$';
 
     if (start_anchor)
-        pattern = pattern[1..];
+        pattern_text = pattern_text[1..];
 
     if (end_anchor)
-        pattern = pattern[0 .. pattern.len - 1];
+        pattern_text = pattern_text[0 .. pattern_text.len - 1];
 
-    var ptr: usize = 0;
+    var cursor: usize = 0;
 
     var item_scanner = Item.Scanner{
-        .text = pattern,
-        .ptr = &ptr,
+        .text = pattern_text,
+        .ptr = &cursor,
         .character_class_scanner = .{
-            .text = pattern,
-            .ptr = &ptr,
+            .text = pattern_text,
+            .ptr = &cursor,
         },
     };
 
     while (try item_scanner.scan()) |pattern_item|
-        try items.append(allocator, pattern_item);
+        try pattern_items.append(allocator, pattern_item);
 
     return .{
-        .items = try items.toOwnedSlice(allocator),
+        .items = try pattern_items.toOwnedSlice(allocator),
         .start_anchor = start_anchor,
         .end_anchor = end_anchor,
     };
@@ -184,9 +184,9 @@ pub const Iterator = struct {
 
         // do it by matching s[0..], s[1..], s[2..], etc.
         o: while (true) {
-            const start = self.subject_ptr;
+            const start_index = self.subject_ptr;
 
-            if (start >= self.subject.len)
+            if (start_index >= self.subject.len)
                 return null;
 
             for (self.pattern.items) |item| {
@@ -195,7 +195,7 @@ pub const Iterator = struct {
                 switch (item) {
                     .character_class => |_| {
                         if (!char_matches_item(subject_char, item)) {
-                            self.subject_ptr = start + 1;
+                            self.subject_ptr = start_index + 1;
                             continue :o;
                         }
                     },
@@ -205,7 +205,7 @@ pub const Iterator = struct {
                 continue;
             }
 
-            return self.subject[start..self.subject_ptr];
+            return self.subject[start_index..self.subject_ptr];
         }
 
         return null; // no more matches

@@ -1,13 +1,9 @@
 const std = @import("std");
-const builtin = @import("builtin");
-const Compiler = @import("./vm/compiler.zig");
-const jdz = @import("jdz");
 const build_options = @import("build_options");
 
 const lunazitic = @import("lunazitic.zig");
 
 pub const UseGPA = build_options.@"use-gpa";
-const MaxUsize = std.math.maxInt(usize);
 
 pub fn deeperFmt(value: anytype, max_depth: usize) DeeperFmt(@TypeOf(value)) {
     return .{ .value = value, .max_depth = max_depth };
@@ -50,7 +46,7 @@ fn help() void {
     , .{}) catch @panic("Stdout not available.");
 }
 
-fn repl(lz: *lunazitic) !u8 {
+fn repl(runtime: *lunazitic) !u8 {
     var stdout = std.fs.File.stdout().deprecatedWriter();
 
     try stdout.writeAll(
@@ -60,12 +56,12 @@ fn repl(lz: *lunazitic) !u8 {
     while (true) {
         try stdout.writeAll("> ");
 
-        const line = try std.fs.File.stdin().deprecatedReader().readUntilDelimiterOrEofAlloc(lz.allocator, '\n', std.math.maxInt(usize));
+        const line = try std.fs.File.stdin().deprecatedReader().readUntilDelimiterOrEofAlloc(runtime.allocator, '\n', std.math.maxInt(usize));
 
         if (line == null)
             break;
 
-        const retd = lz.doString(line.?) catch |e| {
+        const retd = runtime.doString(line.?) catch |e| {
             std.log.err("{any}", .{e});
             continue;
         };
@@ -87,11 +83,11 @@ pub fn main() !u8 {
 
     std.debug.assert(args.len >= 1);
 
-    var lz = try lunazitic.init(allocator);
-    defer lz.deinit();
+    var runtime = try lunazitic.init(allocator);
+    defer runtime.deinit();
 
     if (args.len < 2) {
-        return try repl(&lz);
+        return try repl(&runtime);
     }
 
     const Command = enum {
@@ -113,7 +109,7 @@ pub fn main() !u8 {
             }
 
             const path = args[2];
-            _ = lz.doFile(path) catch |e| switch (e) {
+            _ = runtime.doFile(path) catch |e| switch (e) {
                 error.FileNotFound => {
                     std.log.err("File not found: {s}", .{path});
                     return 1;

@@ -5,17 +5,17 @@ const Pattern = @import("../pattern.zig");
 const NativeFunction = VM.Object.ObjNativeFunction;
 
 pub fn init(vm: *VM) !VM.Value {
-    const string = try VM.Object.ObjTable.create(vm);
-    try string.fields.putWithKeyObjectAuto("byte", try NativeFunction.create(vm, &byte));
-    try string.fields.putWithKeyObjectAuto("len", try NativeFunction.create(vm, &len));
-    try string.fields.putWithKeyObjectAuto("lower", try NativeFunction.create(vm, &lower));
-    try string.fields.putWithKeyObjectAuto("upper", try NativeFunction.create(vm, &upper));
-    try string.fields.putWithKeyObjectAuto("sub", try NativeFunction.create(vm, &sub));
-    try string.fields.putWithKeyObjectAuto("reverse", try NativeFunction.create(vm, &reverse));
-    try string.fields.putWithKeyObjectAuto("format", try NativeFunction.create(vm, &format));
-    try string.fields.putWithKeyObjectAuto("rep", try NativeFunction.create(vm, &rep));
-    try string.fields.putWithKeyObjectAuto("gmatch", try NativeFunction.create(vm, &gmatch));
-    return string.object.asValue();
+    const string_table = try VM.Object.ObjTable.create(vm);
+    try string_table.fields.putWithKeyObjectAuto("byte", try NativeFunction.create(vm, &byte));
+    try string_table.fields.putWithKeyObjectAuto("len", try NativeFunction.create(vm, &len));
+    try string_table.fields.putWithKeyObjectAuto("lower", try NativeFunction.create(vm, &lower));
+    try string_table.fields.putWithKeyObjectAuto("upper", try NativeFunction.create(vm, &upper));
+    try string_table.fields.putWithKeyObjectAuto("sub", try NativeFunction.create(vm, &sub));
+    try string_table.fields.putWithKeyObjectAuto("reverse", try NativeFunction.create(vm, &reverse));
+    try string_table.fields.putWithKeyObjectAuto("format", try NativeFunction.create(vm, &format));
+    try string_table.fields.putWithKeyObjectAuto("rep", try NativeFunction.create(vm, &rep));
+    try string_table.fields.putWithKeyObjectAuto("gmatch", try NativeFunction.create(vm, &gmatch));
+    return string_table.object.asValue();
 }
 
 // string.byte (s [, i [, j]])
@@ -25,8 +25,8 @@ pub fn byte(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
     if (args.len < 1)
         return error.InvalidArgumentCount;
 
-    const str = try args[0].asStringCastNum(vm.allocator);
-    defer if (args[0].isNumber()) vm.allocator.free(str);
+    const source = try args[0].asStringCastNum(vm.allocator);
+    defer if (args[0].isNumber()) vm.allocator.free(source);
 
     const i: f64 = if (args.len > 1 and args[1].isNumber()) args[1].asNumber() else @floatFromInt(1);
     const j: f64 = if (args.len > 2) args[2].asNumber() else i;
@@ -34,7 +34,7 @@ pub fn byte(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
     const char_codes_ret = try vm.allocator.alloc(VM.Value, @intFromFloat(j - (i - 1)));
 
     for (@intFromFloat(i - 1)..@intFromFloat(j), 0..) |index, idx| {
-        const char_code = str[index];
+        const char_code = source[index];
         char_codes_ret[idx] = VM.Value.initNumber(@floatFromInt(char_code));
     }
 
@@ -48,19 +48,19 @@ pub fn sub(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
     if (args.len < 2)
         return error.InvalidArgumentCount;
 
-    const string = try args[0].asStringCastNum(vm.allocator);
-    defer if (args[0].isNumber()) vm.allocator.free(string);
+    const source = try args[0].asStringCastNum(vm.allocator);
+    defer if (args[0].isNumber()) vm.allocator.free(source);
 
     var start = args[1].asNumber() - 1;
     var end = if (args.len > 2) args[2].asNumber() else -1;
 
-    if (start < 0) start = @as(f64, @floatFromInt(string.len)) + start;
-    if (end < 0) end = @as(f64, @floatFromInt(string.len)) + end + 1;
+    if (start < 0) start = @as(f64, @floatFromInt(source.len)) + start;
+    if (end < 0) end = @as(f64, @floatFromInt(source.len)) + end + 1;
 
-    if (start < 0 or start >= @as(f64, @floatFromInt(string.len)) or end < start or end > @as(f64, @floatFromInt(string.len)))
+    if (start < 0 or start >= @as(f64, @floatFromInt(source.len)) or end < start or end > @as(f64, @floatFromInt(source.len)))
         return VM.Value.initNil();
 
-    const substr = string[@as(usize, @intFromFloat(start))..@as(usize, @intFromFloat(end))];
+    const substr = source[@as(usize, @intFromFloat(start))..@as(usize, @intFromFloat(end))];
     return (try VM.Object.ObjString.create(vm, substr)).object.asValue();
 }
 
@@ -115,20 +115,20 @@ pub fn format(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
     if (args.len < 1)
         return error.InvalidArgumentCount;
 
-    const format_string = try args[0].asStringCastNum(vm.allocator);
-    defer if (args[0].isNumber()) vm.allocator.free(format_string);
+    const format_spec = try args[0].asStringCastNum(vm.allocator);
+    defer if (args[0].isNumber()) vm.allocator.free(format_spec);
 
-    var format_string_stream = std.io.fixedBufferStream(format_string);
-    const format_string_reader = format_string_stream.reader();
+    var format_string_stream = std.io.fixedBufferStream(format_spec);
+    const format_reader = format_string_stream.reader();
 
-    var formatted_string = std.ArrayList(u8).empty;
-    defer formatted_string.deinit(vm.allocator);
+    var output = std.ArrayList(u8).empty;
+    defer output.deinit(vm.allocator);
 
     var arg_index: usize = 1;
 
-    while (try readByteOrNull(&format_string_reader)) |c| {
+    while (try readByteOrNull(&format_reader)) |c| {
         if (c != '%') {
-            try formatted_string.append(vm.allocator, (c));
+            try output.append(vm.allocator, c);
             continue;
         }
 
@@ -138,29 +138,29 @@ pub fn format(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
         const arg = args[arg_index];
         arg_index += 1;
 
-        switch ((try readByteOrNull(&format_string_reader)) orelse return error.InvalidOptionToFormat) {
+        switch ((try readByteOrNull(&format_reader)) orelse return error.InvalidOptionToFormat) {
             'd', 'i', 'f', 'u' => {
                 if (!arg.isNumber())
                     return error.BadArgument;
-                try formatted_string.print(vm.allocator, "{d}", .{arg.asNumber()});
+                try output.print(vm.allocator, "{d}", .{arg.asNumber()});
             },
             inline 'x', 'o', 'X' => |x| {
                 if (!arg.isNumber())
                     return error.BadArgument;
                 const fmt: []const u8 = comptime &.{ '{', x, '}' };
-                try formatted_string.print(vm.allocator, fmt, .{@as(usize, @intFromFloat(arg.asNumber()))});
+                try output.print(vm.allocator, fmt, .{@as(usize, @intFromFloat(arg.asNumber()))});
             },
             's' => {
                 const str_arg = try arg.asStringCastNum(vm.allocator);
                 defer if (arg.isNumber()) vm.allocator.free(str_arg);
-                try formatted_string.print(vm.allocator, "{s}", .{str_arg});
+                try output.print(vm.allocator, "{s}", .{str_arg});
             },
-            '%' => try formatted_string.append(vm.allocator, ('%')),
+            '%' => try output.append(vm.allocator, '%'),
             else => return vm.errorFmt(error.BadArgument, "Bad Argument {c}\n", .{c}),
         }
     }
 
-    return (try VM.Object.ObjString.createMoved(vm, try formatted_string.toOwnedSlice(vm.allocator))).object.asValue();
+    return (try VM.Object.ObjString.createMoved(vm, try output.toOwnedSlice(vm.allocator))).object.asValue();
 }
 
 // string.rep (s, n) - Returns a string that is the concatenation of n copies of the string s.
@@ -168,7 +168,7 @@ pub fn rep(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
     if (args.len < 2)
         return error.InvalidArgumentCount;
 
-    const to_concatinate = try args[0].asStringCastNum(vm.allocator);
+    const source = try args[0].asStringCastNum(vm.allocator);
     const times: usize = @intFromFloat(try args[1].asNumberCast(.{}));
 
     // Fast case
@@ -176,7 +176,7 @@ pub fn rep(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
         return (try VM.Object.ObjString.create(vm, "")).object.asValue();
 
     var output = std.ArrayListUnmanaged(u8).empty;
-    try output.writer(vm.allocator).writeBytesNTimes(to_concatinate, times);
+    try output.writer(vm.allocator).writeBytesNTimes(source, times);
 
     return (try VM.Object.ObjString.createMoved(vm, try output.toOwnedSlice(vm.allocator))).object.asValue();
 }
@@ -187,13 +187,13 @@ pub fn gmatch(vm: *VM, scope: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
     if (args.len < 2)
         return error.InvalidArgumentCount;
 
-    const str = try args[0].asStringCastNum(vm.allocator);
+    const source = try args[0].asStringCastNum(vm.allocator);
     const pattern = try args[1].asStringCastNum(vm.allocator);
 
     // for now, just print all characters that match the pattern
     const pattern_iterator = Pattern.Iterator{
         .pattern = try Pattern.make(vm.allocator, pattern),
-        .subject = str,
+        .subject = source,
     };
 
     try scope.internals.put(

@@ -259,35 +259,35 @@ pub const ObjString = struct {
     value: []u8,
 
     pub fn create(vm: *VM, value: []const u8) !*@This() {
-        const gop = try vm.string_pool.getOrPut(value);
+        const entry = try vm.string_pool.getOrPut(value);
 
-        if (!gop.found_existing) {
+        if (!entry.found_existing) {
             const obj_string = try vm.allocateObject();
             obj_string.* = .{ .String = .{
                 .object = obj_string,
                 .value = try vm.allocator.dupe(u8, value),
             } };
-            gop.value_ptr.* = &obj_string.String;
+            entry.value_ptr.* = &obj_string.String;
         }
 
-        return gop.value_ptr.*;
+        return entry.value_ptr.*;
     }
 
     pub fn createMoved(vm: *VM, value: []u8) !*@This() {
-        const gop = try vm.string_pool.getOrPut(value);
+        const entry = try vm.string_pool.getOrPut(value);
 
-        if (!gop.found_existing) {
+        if (!entry.found_existing) {
             const obj_string = try vm.allocateObject();
             obj_string.* = .{ .String = .{
                 .object = obj_string,
                 .value = value,
             } };
-            gop.value_ptr.* = &obj_string.String;
+            entry.value_ptr.* = &obj_string.String;
         } else {
             vm.allocator.free(value);
         }
 
-        return gop.value_ptr.*;
+        return entry.value_ptr.*;
     }
 
     pub fn createIndependant(allocator: std.mem.Allocator, value: []u8) !*@This() {
