@@ -138,7 +138,7 @@ pub const Instruction = union(enum) {
 //}
 
 allocator: std.mem.Allocator,
-global_symbol_map: std.ArrayListUnmanaged(KstringVSymbol) = .{}, // Reduces Opreand size
+global_symbol_map: std.ArrayListUnmanaged(KstringVSymbol) = .empty, // Reduces Opreand size
 
 pub const KstringVSymbol = struct { k: []const u8, v: Instruction.Symbol };
 // TODO: std.BufSet looks promissing
@@ -156,12 +156,12 @@ const Worker = struct {
     allocator: std.mem.Allocator,
     // Some of those should be read-only after done working.
     function: *Object.ObjFunction,
-    symbol_map: std.StringArrayHashMapUnmanaged(LocalData) = .{},
+    symbol_map: std.StringArrayHashMapUnmanaged(LocalData) = .empty,
     previous_worker: ?*Worker = null,
-    upvalues: std.ArrayListUnmanaged(UpvalueData) = .{},
+    upvalues: std.ArrayListUnmanaged(UpvalueData) = .empty,
     reg_allocated: [Instruction.MaxReg]bool = [_]bool{false} ** Instruction.MaxReg,
-    instructions: std.ArrayListUnmanaged(Instruction) = .{},
-    constants: std.ArrayListUnmanaged(Value) = .{},
+    instructions: std.ArrayListUnmanaged(Instruction) = .empty,
+    constants: std.ArrayListUnmanaged(Value) = .empty,
 
     pub fn lastInstructionProducedTuple(self: *@This()) bool {
         return self.instructions.items.len > 0 and self.instructions.items[self.instructions.items.len - 1] == .call_func;
@@ -330,6 +330,7 @@ pub fn compileRoot(self: *@This(), root: AST.Block) anyerror!*Object.ObjClosure 
 
 pub fn compileBlock(self: *@This(), block: AST.Block, worker: *Worker) anyerror!void {
     for (block) |stat| {
+        std.debug.print("STAT: {}\n", .{stat});
         try self.compileStat(stat.*, worker);
     }
 }
@@ -365,7 +366,7 @@ pub fn copyConstToLocal(self: *@This(), op: Instruction.Operand, worker: *Worker
     if (op == .constant) {
         const empty = try worker.getOrCreateEmpty();
 
-        try worker.instructions.append(self.allocator, .{
+        try worker.instructions.append(self.allocator, Instruction{
             .set_local_from_constant = .{ .constant = op.constant, .local = empty.symbol },
         });
         return .{ .local = empty.symbol };
@@ -422,20 +423,20 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
             //   }
         },
         .VarDecl => |vd| {
-            var operands = std.ArrayList(Instruction.Operand).init(self.allocator);
-            defer operands.deinit();
+            var operands = std.ArrayList(Instruction.Operand).empty;
+            defer operands.deinit(self.allocator);
 
             var has_tuple: bool = false;
 
             for (vd.Exps) |exp| {
                 const operand = try self.compileExp(exp.*, worker);
-                try operands.append(operand);
+                try operands.append(self.allocator, operand);
 
                 if (worker.lastInstructionProducedTuple())
                     has_tuple = true;
             }
 
-            const ops = try operands.toOwnedSlice();
+            const ops = try operands.toOwnedSlice(self.allocator);
 
             if (has_tuple) {
                 try worker.instructions.append(self.allocator, Instruction{
@@ -489,7 +490,7 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
                 return;
             };
 
-            var reg_exps: std.ArrayListUnmanaged(Instruction.Operand) = .{};
+            var reg_exps: std.ArrayListUnmanaged(Instruction.Operand) = .empty;
             defer reg_exps.deinit(self.allocator);
 
             var has_tuple: bool = false;
@@ -620,7 +621,7 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
         },
         // FIXME
         .Return => |r| {
-            var reg_list: std.ArrayListUnmanaged(Instruction.Operand) = .{};
+            var reg_list: std.ArrayListUnmanaged(Instruction.Operand) = .empty;
             defer reg_list.deinit(self.allocator);
 
             for (r) |exp| {
@@ -676,14 +677,14 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
             return;
         },
         .GenericFor => |gf| {
-            var operands = std.ArrayList(Instruction.Operand).init(self.allocator);
-            defer operands.deinit();
+            var operands = std.ArrayList(Instruction.Operand).empty;
+            defer operands.deinit(self.allocator);
 
             for (gf.Exps) |exp| {
-                try operands.append(try self.compileExp(exp.*, worker));
+                try operands.append(self.allocator, (try self.compileExp(exp.*, worker)));
             }
 
-            const ops = try operands.toOwnedSlice();
+            const ops = try operands.toOwnedSlice(self.allocator);
             try worker.instructions.append(self.allocator, Instruction{
                 .unwrap_tuple_save = ops,
             });
@@ -922,18 +923,18 @@ pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instru
         .TableConstructor => |tc| {
             const table_reg = try self.startTable(worker);
 
-            var ops = std.ArrayList(Instruction.Operand).init(self.allocator);
-            defer ops.deinit();
+            var ops = std.ArrayList(Instruction.Operand).empty;
+            defer ops.deinit(self.allocator);
 
             for (tc) |iexp| {
                 switch (iexp) {
-                    .Exp => |e| try ops.append(try self.compileExp(e.*, worker)),
-                    .Name => |n| try ops.append(try self.compileExp(n.Exp.*, worker)),
-                    .Index => |i| try ops.append(try self.compileExp(i.Exp.*, worker)),
+                    .Exp => |e| try ops.append(self.allocator, (try self.compileExp(e.*, worker))),
+                    .Name => |n| try ops.append(self.allocator, (try self.compileExp(n.Exp.*, worker))),
+                    .Index => |i| try ops.append(self.allocator, (try self.compileExp(i.Exp.*, worker))),
                 }
             }
 
-            const final_ops = try ops.toOwnedSlice();
+            const final_ops = try ops.toOwnedSlice(self.allocator);
             for (final_ops) |op| worker.freeReg(op);
 
             try worker.instructions.append(self.allocator, Instruction{
@@ -1083,7 +1084,7 @@ pub fn startTable(self: *@This(), worker: *Worker) !Instruction.Operand {
 
 // If need_output is false, then the result is 0
 pub fn funcCall(self: *@This(), fc: AST.FunctionCall, worker: *Worker, comptime need_output: bool) anyerror!?Instruction.Operand {
-    var reg_args: std.ArrayListUnmanaged(Instruction.Operand) = .{};
+    var reg_args: std.ArrayListUnmanaged(Instruction.Operand) = .empty;
     defer reg_args.deinit(self.allocator);
 
     if (fc.Method) |_| {

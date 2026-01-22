@@ -5,11 +5,15 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const use_gpa = b.option(bool, "use-gpa", "Use the General Purpose Allocator") orelse (optimize == .Debug);
 
-    const exe = b.addExecutable(.{
-        .name = "lunazitic",
+    const root_module = b.addModule("lunazitic", .{
         .root_source_file = b.path("src/binary.zig"),
         .target = target,
         .optimize = optimize,
+    });
+
+    const exe = b.addExecutable(.{
+        .name = "lunazitic",
+        .root_module = root_module,
     });
     b.installArtifact(exe);
 

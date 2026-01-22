@@ -73,13 +73,13 @@ pub const ObjTable = struct {
         pub fn init(allocator: std.mem.Allocator) CustomMap {
             return .{
                 .hash_part = HashPart.init(allocator),
-                .array_part = ArrayPart.init(allocator),
+                .array_part = ArrayPart.empty,
                 .string_part = StringPart.init(allocator),
             };
         }
 
         pub fn deinit(self: *CustomMap) void {
-            self.array_part.deinit();
+            self.array_part.deinit(self.string_part.allocator);
             self.hash_part.deinit();
             self.string_part.deinit();
         }
@@ -100,7 +100,7 @@ pub const ObjTable = struct {
         }
 
         pub fn putNoKey(self: *CustomMap, value: VM.Value) !void {
-            try self.array_part.append(value);
+            try self.array_part.append(self.string_part.allocator, (value));
         }
 
         pub fn getWithStr(self: *CustomMap, str: []const u8) !*VM.Value {
@@ -123,7 +123,7 @@ pub const ObjTable = struct {
                     // make sure to resize to the right size
                     const old_size = self.array_part.items.len;
                     const new_size = @as(usize, @intFromFloat(index));
-                    try self.array_part.resize(new_size);
+                    try self.array_part.resize(self.string_part.allocator, new_size);
 
                     for (old_size..new_size) |idx| {
                         self.array_part.items[idx] = VM.Value.initNil();

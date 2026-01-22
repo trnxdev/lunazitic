@@ -55,8 +55,8 @@ pub fn parseRoot(self: *@This()) !AST.Block {
 }
 
 pub fn parseStmtUntil(self: *@This(), until: []const Token.Kind) anyerror!AST.Block {
-    var stmts = std.ArrayList(*AST.Stat).init(self.arena_allocator());
-    defer stmts.deinit();
+    var stmts = std.ArrayList(*AST.Stat).empty;
+    defer stmts.deinit(self.arena_allocator());
 
     o: while (true) {
         const kur = self.current.kind;
@@ -71,10 +71,11 @@ pub fn parseStmtUntil(self: *@This(), until: []const Token.Kind) anyerror!AST.Bl
         }
 
         const stmt = try self.parseStmt();
-        try stmts.append(stmt);
+        std.debug.print("Parsed stmt kind: {any}\n", .{stmt.*});
+        try stmts.append(self.arena_allocator(), stmt);
     }
 
-    return try stmts.toOwnedSlice();
+    return try stmts.toOwnedSlice(self.arena_allocator());
 }
 
 pub fn parseStmt(self: *@This()) !*AST.Stat {
@@ -184,18 +185,18 @@ pub fn parseIf(self: *@This()) !*AST.Stat {
 
     const block = try self.parseStmtUntil(&.{ .elseif, .@"else", .end });
 
-    var elseIfs = std.ArrayList(AST.Stat.ElseIf).init(self.arena_allocator());
-    defer elseIfs.deinit();
+    var elseIfs = std.ArrayList(AST.Stat.ElseIf).empty;
+    defer elseIfs.deinit(self.arena_allocator());
 
     while (self.current.kind == .elseif) {
         _ = try self.advanceIfCurrentKindEql(.elseif);
         const innerexp = try self.parseExp();
         _ = try self.advanceIfCurrentKindEql(.then);
         const innerblock = try self.parseStmtUntil(&.{ .elseif, .@"else", .end });
-        try elseIfs.append(.{
+        try elseIfs.append(self.arena_allocator(), (.{
             .Exp = innerexp,
             .Block = innerblock,
-        });
+        }));
     }
 
     var elseBlock: ?AST.Block = null;
@@ -210,7 +211,7 @@ pub fn parseIf(self: *@This()) !*AST.Stat {
     return try self.allocate(AST.Stat, .{ .If = .{
         .Exp = exp,
         .Block = block,
-        .ElseIfs = try elseIfs.toOwnedSlice(),
+        .ElseIfs = try elseIfs.toOwnedSlice(self.arena_allocator()),
         .Else = elseBlock,
     } });
 }
@@ -321,13 +322,13 @@ pub fn parseLocal(self: *@This()) !*AST.Stat {
 }
 
 pub fn parseVarlist(self: *@This()) !AST.Varlist {
-    var vars = std.ArrayList(AST.Var).init(self.arena_allocator());
-    defer vars.deinit();
+    var vars = std.ArrayList(AST.Var).empty;
+    defer vars.deinit(self.arena_allocator());
 
     var res = self.parseVar();
 
     o: while (!std.meta.isError(res)) : (res = self.parseVar()) {
-        try vars.append(res catch unreachable);
+        try vars.append(self.arena_allocator(), (res catch unreachable));
 
         if (self.current.kind != .Comma) {
             break :o;
@@ -340,7 +341,7 @@ pub fn parseVarlist(self: *@This()) !AST.Varlist {
         return error.NotAValidVar;
     }
 
-    return try vars.toOwnedSlice();
+    return try vars.toOwnedSlice(self.arena_allocator());
 }
 
 pub fn parseVar(self: *@This()) !AST.Var {
@@ -387,9 +388,10 @@ pub fn parsePrefix(self: *@This()) !*AST.Prefix {
             .Colon => {
                 _ = try self.advance();
                 const name = try self.parseName();
+                const prev_prefix = try pref_expr.Prefix.clone(self.arena_allocator());
                 pref_expr.Prefix.* = .{
                     .FunctionCall = try self.allocate(AST.FunctionCall, .{
-                        .Prefix = try pref_expr.Prefix.clone(self.arena_allocator()),
+                        .Prefix = prev_prefix,
                         .Args = try self.parseArgs(),
                         .Method = name,
                     }),
@@ -398,10 +400,11 @@ pub fn parsePrefix(self: *@This()) !*AST.Prefix {
             .Dot => {
                 _ = try self.advance();
                 const name = try self.parseName();
+                const prev_prefix = try pref_expr.Prefix.clone(self.arena_allocator());
                 pref_expr.Prefix.* = .{
                     .Var = .{
                         .DotAccess = .{
-                            .Prefix = try pref_expr.Prefix.clone(self.arena_allocator()),
+                            .Prefix = prev_prefix,
                             .Key = name,
                         },
                     },
@@ -411,10 +414,11 @@ pub fn parsePrefix(self: *@This()) !*AST.Prefix {
                 _ = try self.advance();
                 const exp = try self.parseExp();
                 _ = try self.advanceIfCurrentKindEql(.RightBracket);
+                const prev_prefix = try pref_expr.Prefix.clone(self.arena_allocator());
                 pref_expr.Prefix.* = .{
                     .Var = .{
                         .TableAccess = .{
-                            .Prefix = try pref_expr.Prefix.clone(self.arena_allocator()),
+                            .Prefix = prev_prefix,
                             .Key = exp,
                         },
                     },
@@ -422,10 +426,11 @@ pub fn parsePrefix(self: *@This()) !*AST.Prefix {
             },
             .LeftParenthesis, .String, .LeftCurlyBrace => {
                 const args = try self.parseArgs();
+                const prev_prefix = try pref_expr.Prefix.clone(self.arena_allocator());
 
                 pref_expr.Prefix.* = .{
                     .FunctionCall = try self.allocate(AST.FunctionCall, .{
-                        .Prefix = try pref_expr.Prefix.clone(self.arena_allocator()),
+                        .Prefix = prev_prefix,
                         .Args = args,
                         .Method = null,
                     }),
@@ -439,12 +444,12 @@ pub fn parsePrefix(self: *@This()) !*AST.Prefix {
 }
 
 pub fn parseNamelist(self: *@This()) anyerror!AST.Namelist {
-    var names = std.ArrayList([]const u8).init(self.arena_allocator());
-    defer names.deinit();
+    var names = std.ArrayList([]const u8).empty;
+    defer names.deinit(self.arena_allocator());
 
     o: while (self.current.kind == .Name) {
         const name = try self.parseName();
-        try names.append(name);
+        try names.append(self.arena_allocator(), name);
 
         if (self.current.kind != .Comma) {
             break :o;
@@ -453,16 +458,16 @@ pub fn parseNamelist(self: *@This()) anyerror!AST.Namelist {
         _ = try self.advance();
     }
 
-    return try names.toOwnedSlice();
+    return try names.toOwnedSlice(self.arena_allocator());
 }
 
 pub fn parseExplist(self: *@This()) !AST.Explist {
-    var exps = std.ArrayList(*AST.Exp).init(self.arena_allocator());
-    defer exps.deinit();
+    var exps = std.ArrayList(*AST.Exp).empty;
+    defer exps.deinit(self.arena_allocator());
 
     while (self.current.kind != .Semicolon) {
         const exp = try self.parseExp();
-        try exps.append(exp);
+        try exps.append(self.arena_allocator(), (exp));
 
         if (self.current.kind != .Comma) {
             break;
@@ -471,7 +476,7 @@ pub fn parseExplist(self: *@This()) !AST.Explist {
         _ = try self.advance();
     }
 
-    return try exps.toOwnedSlice();
+    return try exps.toOwnedSlice(self.arena_allocator());
 }
 
 pub fn parseName(self: *@This()) !AST.Name {
@@ -482,12 +487,12 @@ pub fn parseName(self: *@This()) !AST.Name {
 }
 
 pub fn parseFuncName(self: *@This()) !AST.FuncName {
-    var names = std.ArrayList(AST.Name).init(self.arena_allocator());
-    defer names.deinit();
+    var names = std.ArrayList(AST.Name).empty;
+    defer names.deinit(self.arena_allocator());
 
     while (self.current.kind == .Name) {
         const name = try self.parseName();
-        try names.append(name);
+        try names.append(self.arena_allocator(), (name));
 
         if (self.current.kind != .Dot) {
             break;
@@ -504,7 +509,7 @@ pub fn parseFuncName(self: *@This()) !AST.FuncName {
     }
 
     return AST.FuncName{
-        .Names = try names.toOwnedSlice(),
+        .Names = try names.toOwnedSlice(self.arena_allocator()),
         .Method = method,
     };
 }
@@ -515,8 +520,8 @@ pub fn parseFuncBody(self: *@This()) !AST.FuncBody {
     _ = try self.advanceIfCurrentKindEql(.RightParenthesis);
     const block = try self.parseStmtUntil(&.{.end});
 
-    var captured_vars = std.ArrayList(AST.Name).init(self.arena_allocator());
-    defer captured_vars.deinit();
+    var captured_vars = std.ArrayList(AST.Name).empty;
+    defer captured_vars.deinit(self.arena_allocator());
 
     _ = try self.advanceIfCurrentKindEql(.end);
     return AST.FuncBody{
@@ -688,7 +693,7 @@ pub fn parseMultiplicative(self: *@This()) anyerror!*AST.Exp {
 }
 
 pub fn parseUnary(self: *@This()) anyerror!*AST.Exp {
-    var unary_ops = std.ArrayList(AST.UnaryOp).init(self.arena_allocator());
+    var unary_ops = std.ArrayList(AST.UnaryOp).empty;
 
     o: while (true) {
         switch (self.current.kind) {
@@ -700,7 +705,7 @@ pub fn parseUnary(self: *@This()) anyerror!*AST.Exp {
                     else => unreachable,
                 };
 
-                try unary_ops.append(op);
+                try unary_ops.append(self.arena_allocator(), (op));
                 _ = try self.advance();
             },
             else => break :o,
@@ -795,13 +800,12 @@ pub fn parseArgs(self: *@This()) !AST.Args {
         .LeftParenthesis => {
             _ = try self.advanceIfCurrentKindEql(.LeftParenthesis);
 
-            var args = std.ArrayList(*AST.Exp).init(self.arena_allocator());
-            defer args.deinit();
+            var args = std.ArrayList(*AST.Exp).empty;
+            defer args.deinit(self.arena_allocator());
 
             while (self.current.kind != .RightParenthesis) {
                 const exp = try self.parseExp();
-                try args.append(exp);
-
+                try args.append(self.arena_allocator(), (exp));
                 if (self.current.kind != .Comma and self.current.kind == .RightParenthesis) {
                     break;
                 }
@@ -811,7 +815,7 @@ pub fn parseArgs(self: *@This()) !AST.Args {
 
             _ = try self.advanceIfCurrentKindEql(.RightParenthesis);
 
-            return AST.Args{ .Explist = try args.toOwnedSlice() };
+            return AST.Args{ .Explist = try args.toOwnedSlice(self.arena_allocator()) };
         },
         .LeftCurlyBrace => {
             const table = try self.parseTableConstructor();
@@ -834,8 +838,8 @@ pub fn parseArgs(self: *@This()) !AST.Args {
 pub fn parseTableConstructor(self: *@This()) !*AST.Exp {
     _ = try self.advanceIfCurrentKindEql(.LeftCurlyBrace);
 
-    var fields = std.ArrayList(AST.Field).init(self.arena_allocator());
-    defer fields.deinit();
+    var fields = std.ArrayList(AST.Field).empty;
+    defer fields.deinit(self.arena_allocator());
 
     while (self.current.kind != .RightCurlyBrace) {
         const field: AST.Field = switch (self.current.kind) {
@@ -883,7 +887,7 @@ pub fn parseTableConstructor(self: *@This()) !*AST.Exp {
             },
         };
 
-        try fields.append(field);
+        try fields.append(self.arena_allocator(), (field));
 
         if (self.current.kind != .Comma and self.current.kind != .Semicolon) {
             break;
@@ -895,7 +899,7 @@ pub fn parseTableConstructor(self: *@This()) !*AST.Exp {
     _ = try self.advanceIfCurrentKindEql(.RightCurlyBrace);
 
     return try self.allocate(AST.Exp, .{
-        .TableConstructor = try fields.toOwnedSlice(),
+        .TableConstructor = try fields.toOwnedSlice(self.arena_allocator()),
     });
 }
 

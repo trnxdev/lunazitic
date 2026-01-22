@@ -29,7 +29,8 @@ fn DeeperFmt(comptime T: type) type {
 }
 
 fn usage() void {
-    std.io.getStdOut().writer().print(
+    const stdout = std.fs.File.stdout().deprecatedWriter();
+    stdout.print(
         \\Usage: `lunazitic run <file>`
         \\For more help, run `lunazitic help`
         \\
@@ -37,7 +38,8 @@ fn usage() void {
 }
 
 fn help() void {
-    std.io.getStdOut().writer().print(
+    const stdout = std.fs.File.stdout().deprecatedWriter();
+    stdout.print(
         \\Lunazitic - Lua 5.1 impl. in Zig
         \\
         \\Options:
@@ -49,7 +51,7 @@ fn help() void {
 }
 
 fn repl(lz: *lunazitic) !u8 {
-    const stdout = std.io.getStdOut().writer();
+    var stdout = std.fs.File.stdout().deprecatedWriter();
 
     try stdout.writeAll(
         \\Lunazitic - Lua 5.1impl. in Zig (REPL)
@@ -58,25 +60,25 @@ fn repl(lz: *lunazitic) !u8 {
     while (true) {
         try stdout.writeAll("> ");
 
-        const line = try std.io.getStdIn().reader().readUntilDelimiterOrEofAlloc(lz.allocator, '\n', std.math.maxInt(usize));
+        const line = try std.fs.File.stdin().deprecatedReader().readUntilDelimiterOrEofAlloc(lz.allocator, '\n', std.math.maxInt(usize));
 
         if (line == null)
             break;
 
         const retd = lz.doString(line.?) catch |e| {
-            std.log.err("{}", .{e});
+            std.log.err("{any}", .{e});
             continue;
         };
 
         if (retd) |ret|
-            try stdout.print("{}\n", .{ret});
+            try stdout.print("{any}\n", .{ret});
     }
 
     return 0;
 }
 
 pub fn main() !u8 {
-    var gpa = if (UseGPA) std.heap.GeneralPurposeAllocator(.{}){} else void{};
+    var gpa = if (UseGPA) std.heap.DebugAllocator(.{}).init else void{};
     const allocator = if (UseGPA) gpa.allocator() else std.heap.raw_c_allocator;
     defer _ = if (UseGPA) gpa.deinit() else void{};
 
@@ -124,7 +126,7 @@ pub fn main() !u8 {
             return 0;
         },
         Command.version => {
-            std.io.getStdOut().writer().writeAll(build_options.version ++ "\n") catch @panic("Stdout not available.");
+            std.fs.File.stdout().deprecatedWriter().writeAll(build_options.version ++ "\n") catch @panic("Stdout not available.");
             return 0;
         },
     }

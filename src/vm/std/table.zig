@@ -39,14 +39,14 @@ pub fn concat(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
 
     const table: *VM.Object.ObjTable = args[0].asObjectOfType(.Table);
 
-    var res = std.ArrayList(u8).init(vm.allocator);
-    defer res.deinit();
+    var res = std.ArrayList(u8).empty;
+    defer res.deinit(vm.allocator);
 
     for (table.fields.array_part.items) |item| {
         if (item.isNil()) continue;
         const value = item.asObjectOfType(.String).value;
-        try res.appendSlice(value);
+        try res.appendSlice(vm.allocator, value);
     }
 
-    return (try VM.Object.ObjString.createMoved(vm, try res.toOwnedSlice())).object.asValue();
+    return (try VM.Object.ObjString.createMoved(vm, try res.toOwnedSlice(vm.allocator))).object.asValue();
 }

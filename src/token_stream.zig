@@ -80,7 +80,7 @@ pub fn readToArrayUntilEOF(self: *@This(), dest: *std.ArrayList(Token)) !void {
             continue :o;
         }
 
-        try dest.append(token);
+        try dest.append(self.allocator, (token));
     }
 }
 
@@ -176,8 +176,8 @@ pub fn isEOF(self: @This()) bool {
 const OuterSelf = @This();
 
 fn numberToken(self: *@This()) !Token {
-    var num_literal = std.ArrayList(u8).init(self.allocator);
-    defer num_literal.deinit();
+    var num_literal = std.ArrayList(u8).empty;
+    defer num_literal.deinit(self.allocator);
 
     var is_hexadecimal: bool = false;
     var is_float: bool = false;
@@ -190,14 +190,14 @@ fn numberToken(self: *@This()) !Token {
         is_hexadecimal = true;
 
         // == Hexadecimal
-        try num_literal.appendSlice("0x");
+        try num_literal.appendSlice(self.allocator, "0x");
     }
 
     while (true) : (_ = self.advance()) {
         if (is_hexadecimal and isHexadecimalLike(self.peek()))
-            try num_literal.append(self.peek())
+            try num_literal.append(self.allocator, (self.peek()))
         else if (!is_hexadecimal and std.ascii.isDigit(self.peek()))
-            try num_literal.append(self.peek())
+            try num_literal.append(self.allocator, (self.peek()))
         else
             break;
     }
@@ -207,13 +207,13 @@ fn numberToken(self: *@This()) !Token {
 
     if (self.match(".")) {
         is_float = true;
-        try num_literal.append('.');
+        try num_literal.append(self.allocator, ('.'));
 
         while (true) : (_ = self.advance()) {
             if (is_hexadecimal and isHexadecimalLike(self.peek()))
-                try num_literal.append(self.peek())
+                try num_literal.append(self.allocator, (self.peek()))
             else if (!is_hexadecimal and std.ascii.isDigit(self.peek()))
-                try num_literal.append(self.peek())
+                try num_literal.append(self.allocator, (self.peek()))
             else
                 break;
         }
@@ -224,24 +224,24 @@ fn numberToken(self: *@This()) !Token {
     or (!is_hexadecimal and self.match("E") or self.match("e"))) {
     // zig fmt: on
         has_exponent = true;
-        try num_literal.append(std.ascii.toUpper(self.buffer[self.location.offset - 1]));
+        try num_literal.append(self.allocator, (std.ascii.toUpper(self.buffer[self.location.offset - 1])));
 
         if (self.match("-"))
-            try num_literal.append('-')
+            try num_literal.append(self.allocator, ('-'))
         else if (self.match("+"))
-            try num_literal.append('+');
+            try num_literal.append(self.allocator, ('+'));
 
         while (true) : (_ = self.advance()) {
             if (is_hexadecimal and isHexadecimalLike(self.peek()))
-                try num_literal.append(self.peek())
+                try num_literal.append(self.allocator, (self.peek()))
             else if (!is_hexadecimal and std.ascii.isDigit(self.peek()))
-                try num_literal.append(self.peek())
+                try num_literal.append(self.allocator, (self.peek()))
             else
                 break;
         }
     }
 
-    return self.createTokenIL(.Number, try num_literal.toOwnedSlice());
+    return self.createTokenIL(.Number, try num_literal.toOwnedSlice(self.allocator));
 }
 
 fn match(self: *@This(), to_match: []const u8) bool {
@@ -292,7 +292,7 @@ const StringLiteralTokenError = error{
     UnterminatedUnicodeBrace,
 } || std.mem.Allocator.Error || std.fmt.ParseIntError;
 fn stringToken(self: *@This(), string_type: LuaStringType) StringLiteralTokenError!Token {
-    var output = std.ArrayListUnmanaged(u8){};
+    var output = std.ArrayListUnmanaged(u8).empty;
     defer output.deinit(self.allocator);
 
     o: while (true) {
@@ -320,20 +320,20 @@ fn stringToken(self: *@This(), string_type: LuaStringType) StringLiteralTokenErr
 
                 // 3.1 - Lexical Conventions (https://www.lua.org/manual/5.4/manual.html#3)
                 switch (escaping_char) {
-                    'a' => try output.append(self.allocator, std.ascii.control_code.bel), // Bell
-                    'b' => try output.append(self.allocator, std.ascii.control_code.bs), // Backspace
-                    'f' => try output.append(self.allocator, std.ascii.control_code.ff), // Form Feed
-                    'n' => try output.append(self.allocator, '\n'), // Newline
-                    'r' => try output.append(self.allocator, '\r'), // Carriage Return
-                    't' => try output.append(self.allocator, '\t'), // Horizontal Tab
-                    'v' => try output.append(self.allocator, std.ascii.control_code.vt), // Vertical Tab
+                    'a' => try output.append(self.allocator, std.ascii.control_code.bel), // Bell)
+                    'b' => try output.append(self.allocator, std.ascii.control_code.bs), // Backspace)
+                    'f' => try output.append(self.allocator, std.ascii.control_code.ff), // Form Feed)
+                    'n' => try output.append(self.allocator, '\n'), // Newline)
+                    'r' => try output.append(self.allocator, '\r'), // Carriage Return)
+                    't' => try output.append(self.allocator, '\t'), // Horizontal Tab)
+                    'v' => try output.append(self.allocator, std.ascii.control_code.vt), // Vertical Tab)
                     '"' => try output.append(self.allocator, '"'),
                     '[' => try output.append(self.allocator, '['),
                     ']' => try output.append(self.allocator, ']'),
-                    '\'' => try output.append(self.allocator, '\''),
-                    '\\' => try output.append(self.allocator, '\\'),
+                    '\'' => try output.append(self.allocator, ('\'')),
+                    '\\' => try output.append(self.allocator, ('\\')),
                     'z' => _ = self.advance(),
-                    '\n' => try output.append(self.allocator, '\n'),
+                    '\n' => try output.append(self.allocator, ('\n')),
                     'u' => {
                         if (!self.match("{"))
                             return error.UnicodeBraceMissing;
@@ -372,7 +372,7 @@ fn stringToken(self: *@This(), string_type: LuaStringType) StringLiteralTokenErr
                             16,
                         );
 
-                        try output.append(self.allocator, hexadecimal_char);
+                        try output.append(self.allocator, (hexadecimal_char));
                     },
                     '0'...'9' => {
                         const start = self.location.offset - 1;
@@ -387,7 +387,7 @@ fn stringToken(self: *@This(), string_type: LuaStringType) StringLiteralTokenErr
                             self.buffer[start..self.location.offset],
                             10,
                         );
-                        try output.append(self.allocator, ascii_char);
+                        try output.append(self.allocator, (ascii_char));
                     },
                     else => return error.InvalidEscapeChar,
                 }
@@ -396,7 +396,7 @@ fn stringToken(self: *@This(), string_type: LuaStringType) StringLiteralTokenErr
             }
         }
 
-        try output.append(self.allocator, char);
+        try output.append(self.allocator, (char));
     }
 
     return self.createTokenIL(.String, try output.toOwnedSlice(self.allocator));

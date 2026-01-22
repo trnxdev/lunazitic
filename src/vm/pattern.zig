@@ -133,8 +133,8 @@ end_anchor: bool, // true if the pattern ends with $
 pub fn make(allocator: std.mem.Allocator, given_pattern: []const u8) !@This() {
     var pattern = given_pattern;
 
-    var items = std.ArrayList(Item).init(allocator);
-    defer items.deinit();
+    var items = std.ArrayList(Item).empty;
+    defer items.deinit(allocator);
 
     const start_anchor = pattern.len > 0 and pattern[0] == '^';
     const end_anchor = pattern.len > 0 and pattern[pattern.len - 1] == '$';
@@ -157,10 +157,10 @@ pub fn make(allocator: std.mem.Allocator, given_pattern: []const u8) !@This() {
     };
 
     while (try item_scanner.scan()) |pattern_item|
-        try items.append(pattern_item);
+        try items.append(allocator, pattern_item);
 
     return .{
-        .items = try items.toOwnedSlice(),
+        .items = try items.toOwnedSlice(allocator),
         .start_anchor = start_anchor,
         .end_anchor = end_anchor,
     };

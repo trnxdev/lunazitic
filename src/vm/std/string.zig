@@ -121,14 +121,14 @@ pub fn format(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
     var format_string_stream = std.io.fixedBufferStream(format_string);
     const format_string_reader = format_string_stream.reader();
 
-    var formatted_string = std.ArrayList(u8).init(vm.allocator);
-    defer formatted_string.deinit();
+    var formatted_string = std.ArrayList(u8).empty;
+    defer formatted_string.deinit(vm.allocator);
 
     var arg_index: usize = 1;
 
     while (try readByteOrNull(&format_string_reader)) |c| {
         if (c != '%') {
-            try formatted_string.append(c);
+            try formatted_string.append(vm.allocator, (c));
             continue;
         }
 
@@ -142,25 +142,25 @@ pub fn format(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
             'd', 'i', 'f', 'u' => {
                 if (!arg.isNumber())
                     return error.BadArgument;
-                try formatted_string.writer().print("{d}", .{arg.asNumber()});
+                try formatted_string.print(vm.allocator, "{d}", .{arg.asNumber()});
             },
             inline 'x', 'o', 'X' => |x| {
                 if (!arg.isNumber())
                     return error.BadArgument;
                 const fmt: []const u8 = comptime &.{ '{', x, '}' };
-                try formatted_string.writer().print(fmt, .{@as(usize, @intFromFloat(arg.asNumber()))});
+                try formatted_string.print(vm.allocator, fmt, .{@as(usize, @intFromFloat(arg.asNumber()))});
             },
             's' => {
                 const str_arg = try arg.asStringCastNum(vm.allocator);
                 defer if (arg.isNumber()) vm.allocator.free(str_arg);
-                try formatted_string.writer().print("{s}", .{str_arg});
+                try formatted_string.print(vm.allocator, "{s}", .{str_arg});
             },
-            '%' => try formatted_string.append('%'),
+            '%' => try formatted_string.append(vm.allocator, ('%')),
             else => return vm.errorFmt(error.BadArgument, "Bad Argument {c}\n", .{c}),
         }
     }
 
-    return (try VM.Object.ObjString.createMoved(vm, try formatted_string.toOwnedSlice())).object.asValue();
+    return (try VM.Object.ObjString.createMoved(vm, try formatted_string.toOwnedSlice(vm.allocator))).object.asValue();
 }
 
 // string.rep (s, n) - Returns a string that is the concatenation of n copies of the string s.
@@ -175,7 +175,7 @@ pub fn rep(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
     if (times == 0)
         return (try VM.Object.ObjString.create(vm, "")).object.asValue();
 
-    var output = std.ArrayListUnmanaged(u8){};
+    var output = std.ArrayListUnmanaged(u8).empty;
     try output.writer(vm.allocator).writeBytesNTimes(to_concatinate, times);
 
     return (try VM.Object.ObjString.createMoved(vm, try output.toOwnedSlice(vm.allocator))).object.asValue();

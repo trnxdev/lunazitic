@@ -41,7 +41,7 @@ const MAX_SYMBOL = std.math.maxInt(Compiler.Instruction.Symbol);
 const MAX_INSTRUCTIONS = @typeInfo(Compiler.Instruction).@"union".fields.len;
 
 pub const Scope = struct {
-    internals: std.StringArrayHashMapUnmanaged(Value) = .{},
+    internals: std.StringArrayHashMapUnmanaged(Value) = .empty,
     outer: ?*Scope = null,
     return_slot: ?*Object.ObjTuple = null,
     varargs: ?*Object.ObjTuple = null,
@@ -60,7 +60,7 @@ pub const Scope = struct {
     };
 };
 
-pub const ValueList = std.ArrayList(Value);
+pub const ValueList = std.array_list.Managed(Value);
 pub const VM = @This();
 
 pub fn init(
@@ -321,24 +321,24 @@ pub fn next(vm: *VM, _: *Scope, args: []Value) anyerror!Value {
 pub fn print(vm: *VM, scope: *Scope, args: []const Value) anyerror!Value {
     _ = vm;
     _ = scope;
-    var buffered = std.io.bufferedWriter(std.io.getStdOut().writer());
-    const stdout = buffered.writer().any();
+    var buffer: [1024]u8 = undefined;
+    const stdout = std.fs.File.stdout();
+    var buffered_out = stdout.writer(&buffer);
+    var out = &buffered_out.interface;
 
     for (args, 0..) |arg, i| {
-        try tostring_internal(arg, stdout);
+        try tostring_internal(arg, out);
         if (i + 1 < args.len)
-            try stdout.writeByte('\t');
+            try out.writeAll("\t");
     }
 
-    try stdout.writeByte(std.ascii.control_code.lf);
-
-    try buffered.flush();
-
+    try out.writeAll("\n");
+    try out.flush();
     return Value.initNil();
 }
 
 // Returns bytes written.
-pub fn tostring_internal(value: Value, writer: std.io.AnyWriter) !void {
+pub fn tostring_internal(value: Value, writer: *std.io.Writer) !void {
     if (value.isObject()) {
         const obj = value.asObject();
 
@@ -354,13 +354,11 @@ pub fn tostring_internal(value: Value, writer: std.io.AnyWriter) !void {
             .Closure => "function:c",
             .String => unreachable,
             .Tuple => "THIS_SHOULD_NOT_BE_PRINTED_tuple",
-            .NativeValue => "native_value"
+            .NativeValue => "native_value",
         };
         try writer.print("{s}: 0x:{x}", .{ obj_type_str, @intFromPtr(obj) });
     } else if (value.isNumber()) {
-        var buf: [std.fmt.format_float.bufferSize(.decimal, f64)]u8 = undefined;
-        const str = try std.fmt.formatFloat(&buf, value.asNumber(), .{ .mode = .decimal });
-        try writer.writeAll(str);
+        try writer.print("{d}", .{value.asNumber()});
     } else if (value.isBool()) {
         try writer.writeAll(if (value.asBool()) "true" else "false");
     } else if (value.isNil()) {
@@ -379,10 +377,11 @@ pub fn tostring(vm: *VM, _: *Scope, args: []const Value) anyerror!Value {
         return (try Object.ObjString.create(vm, arg.asObjectOfType(.String).value)).object.asValue();
     }
 
-    var buf: std.ArrayList(u8) = .init(vm.allocator);
-    try tostring_internal(arg, buf.writer().any());
+    var buf: std.ArrayList(u8) = .empty;
+    var wrd = buf.writer(vm.allocator).adaptToNewApi(&.{}).new_interface;
+    try tostring_internal(arg, &wrd);
 
-    return (try Object.ObjString.createMoved(vm, try buf.toOwnedSlice())).object.asValue();
+    return (try Object.ObjString.createMoved(vm, try buf.toOwnedSlice(vm.allocator))).object.asValue();
 }
 
 pub fn assert(vm: *VM, scope: *Scope, args: []Value) anyerror!Value {
@@ -850,7 +849,7 @@ pub fn callFunction(self: *@This(), func: Value, scope: *Scope, given_args: []Va
     }
 
     if (!func.isObjectOfType(.Closure))
-        return self.errorFmt(error.InvalidCaller, "Expected function (closure), got {}", .{func});
+        return self.errorFmt(error.InvalidCaller, "Expected function (closure), got {any}", .{func});
 
     const closure: *Object.ObjClosure = func.asObjectOfType(.Closure);
     const new_scope = try self.newScope(scope);

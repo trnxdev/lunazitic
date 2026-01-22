@@ -249,14 +249,14 @@ pub fn makeSimpleMathFuncInfArgs(func: fn ([]const f64) f64) fn (*VM, *VM.Scope,
     return struct {
         fn innerfunc(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
             // FIXME: Max args is 255? Maybe dont allocate in memory
-            var nums = std.ArrayList(f64).init(vm.allocator);
-            defer nums.deinit();
+            var nums = std.ArrayList(f64).empty;
+            defer nums.deinit(vm.allocator);
 
             for (args) |arg| {
                 const num = try arg.asNumberCast(.{
                     .string = true,
                 });
-                try nums.append(num);
+                try nums.append(vm.allocator, (num));
             }
 
             return VM.Value.initNumber(func(nums.items));
