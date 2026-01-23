@@ -98,8 +98,10 @@ pub fn asStringCastNum(self: @This(), allocator: std.mem.Allocator) ![]const u8 
         self.asObjectOfType(.String).value
     else if (self.isNumber())
         try std.fmt.allocPrint(allocator, "{d}", .{self.asNumber()})
-    else
+    else {
+        std.log.err("Cannnot cast value to string: {f}", .{self});
         return error.CannotCastToString;
+    };
 }
 
 pub fn format(

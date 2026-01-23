@@ -482,7 +482,10 @@ pub fn tostring_internal(value: Value, writer: *std.io.Writer) !void {
     } else if (value.isNumber()) {
         try writer.print("{d}", .{value.asNumber()});
     } else if (value.isBool()) {
-        try writer.writeAll(if (value.asBool()) "true" else "false");
+        if (value.asBool())
+            try writer.writeAll("true")
+        else
+            try writer.writeAll("false");
     } else if (value.isNil()) {
         try writer.writeAll("nil");
     } else {
@@ -603,6 +606,7 @@ pub fn destroyScope(self: *@This(), scope: *Scope) void {
     scope.pc = 0;
     scope.exit = .None;
     scope.return_slot = null;
+    scope.varargs = null;
 
     scope.internals.deinit(self.allocator);
     scope.internals = .empty;
@@ -1039,12 +1043,8 @@ pub fn callFunction(self: *@This(), func: Value, scope: *Scope, given_args: []Va
     try self.runClosure(closure, new_scope);
     defer self.destroyScope(new_scope);
 
-    if (new_scope.return_slot) |rs| {
-        if (rs.values.len > 1)
-            return rs.object.asValue();
-
-        return rs.values[0];
-    }
+    if (new_scope.return_slot) |rs|
+        return rs.object.asValue();
 
     return Value.initNil();
 }

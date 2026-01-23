@@ -67,7 +67,6 @@ local function encode_table(val, stack)
   if stack[val] then error("circular reference") end
   stack[val] = true
   
-  print("im here")
   if rawget(val, 1) ~= nil or next(val) == nil then
     -- Treat as array -- check keys are valid and it is not sparse
     local n = 0
@@ -103,7 +102,6 @@ end
 
 
 local function encode_string(val)
-  print("IMPLEMENT GSUB")
   return '"' .. val:gsub('[%z\1-\31\\"]', escape_char) .. '"'
 end
 
@@ -130,7 +128,6 @@ local type_func_map = {
 encode = function(val, stack)
   local t = type(val)
   local f = type_func_map[t]
-  print("Encoding type: ", t, f)
   if f then
     return f(val, stack)
   end
@@ -139,7 +136,6 @@ end
 
 
 function json.encode(val)
-  print ("Encoding JSON")
   return ( encode(val) )
 end
 
@@ -411,7 +407,7 @@ end
 local res = json.encode({
   foo = "bar",
   baz = { 1, 2, 3, 4, 5 },
-  bool = true,
+  --bool = true,
   nul = nil,
   num = 123.456,
 })

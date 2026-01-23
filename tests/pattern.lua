@@ -29,3 +29,8 @@ for m in string.gmatch("abc 123 !?", "[^%s]+") do print(m) end
 -- Ranges
 print("9")
 for m in string.gmatch("a1b2c3x9y8z7", "[a-c][1-3]") do print(m) end
+
+-- string.format
+print("10")
+formatted = string.format("%.14g", 3.14159265358979323846)
+print(formatted)

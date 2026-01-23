@@ -1,6 +1,10 @@
 const std = @import("std");
 const VM = @import("../vm.zig");
 const Pattern = @import("../pattern.zig");
+// TODO: remove
+const C = @cImport({
+    @cInclude("stdio.h");
+});
 
 const NativeFunction = VM.Object.ObjNativeFunction;
 
@@ -128,6 +132,8 @@ pub fn format(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
     var arg_index: usize = 1;
 
     while (try readByteOrNull(&format_reader)) |c| {
+        const beg: usize = format_reader.context.pos - 1;
+
         if (c != '%') {
             try output.append(vm.allocator, c);
             continue;
@@ -157,7 +163,34 @@ pub fn format(vm: *VM, _: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
                 try output.print(vm.allocator, "{s}", .{str_arg});
             },
             '%' => try output.append(vm.allocator, '%'),
-            else => return vm.errorFmt(error.BadArgument, "Bad Argument {c}\n", .{c}),
+            '.' => {
+                var precision_num: usize = 0;
+
+                var maybe_digit_char: u8 = undefined;
+                while (true) {
+                    maybe_digit_char = try readByteOrNull(&format_reader) orelse return error.InvalidOptionToFormat;
+                    if (maybe_digit_char < '0' or maybe_digit_char > '9')
+                        break;
+                    precision_num = precision_num * 10 + (@as(usize, maybe_digit_char) - @as(usize, '0'));
+                }
+
+                if (maybe_digit_char != 'f' and maybe_digit_char != 'g')
+                    return error.InvalidOptionToFormat;
+
+                if (!arg.isNumber())
+                    return error.BadArgument;
+
+                const now = format_reader.context.pos;
+                var output_buf: [32]u8 = undefined;
+
+                const ret = C.snprintf(&output_buf, output_buf.len, format_spec[beg..now].ptr, arg.asNumber());
+
+                if (ret < 0)
+                    return error.FormatError;
+
+                try output.appendSlice(vm.allocator, output_buf[0..@as(usize, @intCast(ret))]);
+            },
+            else => |x| return vm.errorFmt(error.BadArgument, "Bad Argument {c}\n", .{x}),
         }
     }
 

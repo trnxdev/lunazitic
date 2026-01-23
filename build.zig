@@ -32,9 +32,9 @@ pub fn build(b: *std.Build) void {
     options.addOption([]const u8, "version", version);
     exe.root_module.addOptions("build_options", options);
 
-    if (!use_gpa) {
-        exe.linkLibC();
-    }
+    // if (!use_gpa) {
+    exe.linkLibC();
+    //}
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());

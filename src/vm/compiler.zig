@@ -827,6 +827,16 @@ pub fn putOptimizedBin(self: *@This(), lhs: Instruction.Operand, rhs: Instructio
     });
 }
 
+pub fn unwrapTupleFirst(self: *@This(), operand: *Instruction.Operand, worker: *Worker) anyerror!void {
+    const dest = try worker.allocateReg();
+    try worker.instructions.append(self.allocator, Instruction{ .copy_first_from_if_tuple = .{
+        .src = operand.*,
+        .dest = dest,
+    } });
+    worker.freeReg(operand.*);
+    operand.* = dest;
+}
+
 // Owner owns the register
 pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instruction.Operand {
     return switch (exp) {
@@ -841,13 +851,7 @@ pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instru
             defer worker.freeReg(lhs);
 
             if (worker.lastInstructionProducedTuple()) {
-                const dest = try worker.allocateReg();
-                try worker.instructions.append(self.allocator, Instruction{ .copy_first_from_if_tuple = .{
-                    .src = lhs,
-                    .dest = dest,
-                } });
-                worker.freeReg(lhs);
-                lhs = dest;
+                try self.unwrapTupleFirst(&lhs, worker);
             }
             // And and Or use short-cut evaluation, which
             // may not evaluate the right-hand side and
@@ -867,8 +871,12 @@ pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instru
                     },
                 });
 
-                const rhs = try self.compileExp(b.Right.*, worker);
+                var rhs = try self.compileExp(b.Right.*, worker);
                 defer worker.freeReg(rhs);
+
+                if (worker.lastInstructionProducedTuple()) {
+                    try self.unwrapTupleFirst(&rhs, worker);
+                }
 
                 try self.putOptimizedBin(lhs, rhs, dest, .Eql, worker);
 
@@ -885,8 +893,12 @@ pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instru
                     .target = 0,
                 } });
 
-                const rhs = try self.compileExp(b.Right.*, worker);
+                var rhs = try self.compileExp(b.Right.*, worker);
                 defer worker.freeReg(rhs);
+
+                if (worker.lastInstructionProducedTuple()) {
+                    try self.unwrapTupleFirst(&rhs, worker);
+                }
 
                 try worker.instructions.append(self.allocator, Instruction{ .copy = .{
                     .src = rhs,
@@ -906,8 +918,12 @@ pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instru
                 return dest;
             }
 
-            const rhs = try self.compileExp(b.Right.*, worker);
+            var rhs = try self.compileExp(b.Right.*, worker);
             defer worker.freeReg(rhs);
+
+            if (worker.lastInstructionProducedTuple()) {
+                try self.unwrapTupleFirst(&rhs, worker);
+            }
 
             const dest = try worker.allocateReg();
 
