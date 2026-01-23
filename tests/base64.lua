@@ -9,13 +9,13 @@ a bitwise operation lib for lua.
 http://luaforge.net/projects/bit/
 --------------------]] --
 
-local function check_int(n)
+function check_int(n)
     if (n - math.floor(n) > 0) then
         assert(false, "trying to use bitwise operation on non-integer!")
     end
 end
 
-local function to_bits(n)
+function to_bits(n)
     check_int(n)
     if (n < 0) then
         return to_bits(bit_not(math.abs(n)) + 1)

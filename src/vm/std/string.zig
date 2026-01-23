@@ -7,6 +7,7 @@ const NativeFunction = VM.Object.ObjNativeFunction;
 pub fn init(vm: *VM) !VM.Value {
     const string_table = try VM.Object.ObjTable.create(vm);
     try string_table.fields.putWithKeyObjectAuto("byte", try NativeFunction.create(vm, &byte));
+    try string_table.fields.putWithKeyObjectAuto("gsub", try NativeFunction.create(vm, &gsub));
     try string_table.fields.putWithKeyObjectAuto("len", try NativeFunction.create(vm, &len));
     try string_table.fields.putWithKeyObjectAuto("lower", try NativeFunction.create(vm, &lower));
     try string_table.fields.putWithKeyObjectAuto("upper", try NativeFunction.create(vm, &upper));
@@ -212,4 +213,69 @@ fn gmatch_inner(vm: *VM, scope: *VM.Scope, _: []VM.Value) anyerror!VM.Value {
         (try VM.Object.ObjString.create(vm, match)).object.asValue()
     else
         VM.Value.initNil();
+}
+
+pub fn gsub(vm: *VM, scope: *VM.Scope, args: []VM.Value) anyerror!VM.Value {
+    //  std.debug.panic("string.gsub is not fully implemented yet", .{});
+
+    if (args.len < 3)
+        return error.InvalidArgumentCount;
+
+    const source = try args[0].asStringCastNum(vm.allocator);
+    const pattern = try args[1].asStringCastNum(vm.allocator);
+
+    if (!args[2].isObjectOfType(.String) and !args[2].isObjectOfType(.Closure))
+        return error.Unsupported;
+
+    const replacement = args[2];
+
+    if (args.len > 3) {
+        // currently not supported
+        std.debug.print("Warning: string.gsub with 4th argument is not supported yet.\n", .{});
+        return error.InvalidArgumentCount;
+    }
+
+    var pattern_iterator = Pattern.Iterator{
+        .pattern = try Pattern.make(vm.allocator, pattern),
+        .subject = source,
+    };
+
+    var output = std.ArrayList(u8).empty;
+    defer output.deinit(vm.allocator);
+
+    var last_index: usize = 0;
+
+    while (try pattern_iterator.scan()) |_| {
+        try output.appendSlice(vm.allocator, source[last_index..pattern_iterator.match_start]);
+
+        // If repl is a function, then this function is called every time a match occurs, with all captured substrings passed as arguments, in order;
+        // if the pattern specifies no captures, then the whole match is passed as a sole argument.
+        // TODO: support captures
+        if (replacement.isObjectOfType(.Closure)) {
+            const closure_obj: *VM.Object.ObjClosure = replacement.asObjectOfType(.Closure);
+            var replacement_args: [1]VM.Value = .{VM.Value.initNil()};
+            replacement_args[0] = (try VM.Object.ObjString.create(vm, source[pattern_iterator.match_start..pattern_iterator.match_end])).object.asValue();
+            const ret_value = try vm.callFunction(
+                closure_obj.object.asValue(),
+                scope,
+                &replacement_args,
+                .No,
+            );
+            if (!ret_value.isObjectOfType(.String))
+                return error.BadArgument;
+            const ret_str = ret_value.asObjectOfType(.String).value;
+            try output.appendSlice(vm.allocator, ret_str);
+        } else if (replacement.isObjectOfType(.String)) {
+            const replacement_str = replacement.asObjectOfType(.String).value;
+            try output.appendSlice(vm.allocator, replacement_str);
+        } else {
+            unreachable;
+        }
+
+        last_index = pattern_iterator.match_end;
+    }
+
+    try output.appendSlice(vm.allocator, source[last_index..]);
+
+    return (try VM.Object.ObjString.createMoved(vm, try output.toOwnedSlice(vm.allocator))).object.asValue();
 }

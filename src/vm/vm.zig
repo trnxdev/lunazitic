@@ -96,7 +96,11 @@ pub fn init(
     try vm.global_vars.fields.putWithKeyObjectAuto("print", try Object.ObjNativeFunction.create(vm, &print));
     try vm.global_vars.fields.putWithKeyObjectAuto("tostring", try Object.ObjNativeFunction.create(vm, &tostring));
     try vm.global_vars.fields.putWithKeyObjectAuto("assert", try Object.ObjNativeFunction.create(vm, &assert));
+    try vm.global_vars.fields.putWithKeyObjectAuto("select", try Object.ObjNativeFunction.create(vm, &select));
+    try vm.global_vars.fields.putWithKeyObjectAuto("type", try Object.ObjNativeFunction.create(vm, &type_fn));
     try vm.global_vars.fields.putWithKeyObjectAuto("next", try Object.ObjNativeFunction.create(vm, &next));
+    try vm.global_vars.fields.putWithKeyObjectAuto("rawget", try Object.ObjNativeFunction.create(vm, &rawget));
+    try vm.global_vars.fields.putWithKeyObjectAuto("error", try Object.ObjNativeFunction.create(vm, &error_fn));
     try vm.global_vars.fields.putWithKeyObjectAuto("pairs", try Object.ObjNativeFunction.create(vm, &pairs));
     try vm.global_vars.fields.putWithKeyObjectAuto("ipairs", try Object.ObjNativeFunction.create(vm, &ipairs));
     try vm.global_vars.fields.putWithKeyObjectAuto("_G", vm.global_vars);
@@ -129,6 +133,102 @@ pub fn init(
     try vm.global_vars.fields.putWithKey("io", io);
 
     return vm;
+}
+
+// this should ACTUALLY rawget, metamethods are not really implemented yet TODO TODO
+pub fn rawget(
+    _: *VM,
+    _: *Scope,
+    args: []const Value,
+) anyerror!Value {
+    if (args.len < 2)
+        return error.InvalidArgumentCount;
+
+    if (!args[0].isObjectOfType(.Table))
+        return error.BadArgument;
+
+    const table: *Object.ObjTable = args[0].asObjectOfType(.Table);
+    const key = args[1];
+
+    const value = try table.fields.getWithKey(key);
+
+    return value.*;
+}
+
+pub fn error_fn(
+    vm: *VM,
+    _: *Scope,
+    args: []const Value,
+) anyerror!Value {
+    _ = vm;
+    _ = args;
+    return error.RuntimeError;
+}
+
+pub fn type_fn(
+    vm: *VM,
+    _: *Scope,
+    args: []const Value,
+) anyerror!Value {
+    if (args.len < 1)
+        return error.ValueExpected;
+
+    const arg = args[0];
+
+    const type_str = if (arg.isNil())
+        "nil"
+    else if (arg.isBool())
+        "boolean"
+    else if (arg.isNumber())
+        "number"
+    else if (arg.isObject()) v: {
+        const obj = arg.asObject();
+        break :v switch (std.meta.activeTag(obj.*)) {
+            .Table => "table",
+            .Function => "function",
+            .NativeFunction => "function",
+            .Closure => "function",
+            .String => "string",
+            .Tuple => std.debug.panic("should not happen", .{}),
+            .NativeValue => "userdata", // is this correct?
+            // TODO: thread as defined in 2.2 – Values and Types
+        };
+    } else {
+        std.debug.panic("should not happen x2", .{});
+    };
+
+    return (try Object.ObjString.create(vm, type_str)).object.asValue();
+}
+
+// TODO: test if it's correctly, e.g. works with casts
+pub fn select(
+    vm: *VM,
+    _: *Scope,
+    args: []const Value,
+) anyerror!Value {
+    if (args.len < 1)
+        return error.InvalidArgumentCount;
+
+    const index = args[0];
+
+    // If index is a number, returns all arguments after argument number index.
+    if (index.isNumber()) {
+        const idx: usize = @intFromFloat(index.asNumber());
+
+        if (idx == 0 or idx > args.len -| 1)
+            return Value.initNil();
+
+        return (try Object.ObjTuple.createOwned(vm, args[idx..])).object.asValue();
+    }
+
+    // Otherwise, index must be the string "#", and select returns the total number of extra arguments it received.
+    const selector = args[0].asObjectOfType(.String).value;
+
+    if (std.mem.eql(u8, selector, "#")) {
+        return Value.initNumber(@floatFromInt(args.len -| 1));
+    }
+
+    return error.BadArgument;
 }
 
 pub fn deinit(self: *@This()) void {
@@ -654,6 +754,9 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
     };
 
     switch (instr) {
+        .bruh_just_break => {
+            @panic("TODO");
+        },
         .unwrap_tuple_save => |op_list| {
             var o_buf: [255]Value = undefined;
             const values = try self.resolveOperandListToBuf(op_list, &o_buf, closure, scope);
@@ -912,13 +1015,16 @@ pub fn callFunction(self: *@This(), func: Value, scope: *Scope, given_args: []Va
     }
 
     if (!func.isObjectOfType(.Closure))
-        return self.errorFmt(error.InvalidCaller, "Expected function (closure), got {any}", .{func});
+        return self.errorFmt(error.InvalidCaller, "Expected function (closure), got {f}", .{func});
 
     const closure: *Object.ObjClosure = func.asObjectOfType(.Closure);
     const new_scope = try self.newScope(scope);
 
     for (0..closure.func.params.len) |i| {
-        new_scope.locals[i] = args[i];
+        new_scope.locals[i] = if (i < args.len)
+            args[i]
+        else
+            Value.initNil();
     }
 
     if (closure.func.var_arg and args.len > closure.func.params.len) {

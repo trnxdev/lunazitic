@@ -9,6 +9,7 @@ pub const Instruction = union(enum) {
         constant: usize,
         dest: Operand,
     },
+    bruh_just_break: void,
     set_nil_local: Symbol,
     panic: void,
     copy_first_from_if_tuple: SrcDest,
@@ -638,36 +639,8 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
         .LocalFunction => |lf| {
             const func_symbol = (try worker.getOrCreateLocalData(lf.Name, false)).symbol;
 
-            var local_function = try Object.ObjFunction.createIndependant(
-                self.allocator,
-                lf.Name,
-                lf.Body.Params.Names,
-                lf.Body.Params.HasVararg,
-            );
-
-            var new_worker = Worker{
-                .function = local_function,
-                .allocator = self.allocator,
-                .previous_worker = worker,
-            };
-            defer new_worker.deinit();
-
-            for (lf.Body.Params.Names) |n| {
-                _ = try new_worker.getOrCreateLocalData(n, false);
-            }
-
-            if (lf.Body.Block.len > 0) {
-                try self.compileBlock(lf.Body.Block, &new_worker);
-            }
-
-            local_function.instructions = try new_worker.instructions.toOwnedSlice(self.allocator);
-            local_function.constants = try new_worker.constants.toOwnedSlice(self.allocator);
-            local_function.upvalues = try new_worker.upvalues.toOwnedSlice(self.allocator);
-
-            const function_constant = try worker.putConstant(local_function.object.asValue());
-
             try worker.instructions.append(self.allocator, Instruction{ .make_closure = .{
-                .constant = function_constant,
+                .constant = try self.createFunction(lf.Name, lf.Body, worker),
                 .dest = .{ .local = func_symbol },
             } });
             return;
@@ -757,8 +730,90 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
             try worker.instructions.append(self.allocator, Instruction{ .jump = begin });
             worker.instructions.items[to_patch].jump_if_nil.target = worker.instructions.items.len;
         },
+        .Function => |f| {
+            if (f.Name.Method) |m|
+                std.debug.panic("Method functions are not supported yet: {s}\n", .{m});
+
+            const names = f.Name.Names;
+            std.debug.assert(names.len >= 1);
+
+            if (names.len == 1) {
+                const func_symbol = try self.getOrCreateGlobalSymbol(names[0]);
+
+                try worker.instructions.append(self.allocator, Instruction{ .make_closure = .{
+                    .constant = try self.createFunction(names[0], f.Body, worker),
+                    .dest = .{ .global = func_symbol },
+                } });
+                return;
+            } else {
+                // find table until the last name which is the function name
+                const table_operand: Instruction.Operand = try self.compilePrefix(.{ .Var = .{
+                    .Name = names[0],
+                } }, worker);
+                defer worker.freeReg(table_operand);
+
+                for (names[1 .. names.len - 1]) |name| {
+                    try worker.instructions.append(self.allocator, Instruction{ .get_field_by_str = .{
+                        .field = name,
+                        .table = table_operand,
+                        .dest = table_operand,
+                    } });
+                }
+
+                const func_name = names[names.len - 1];
+
+                const temp_reg = try worker.allocateReg();
+                defer worker.freeReg(temp_reg);
+
+                try worker.instructions.append(self.allocator, Instruction{ .make_closure = .{
+                    .constant = try self.createFunction(func_name, f.Body, worker),
+                    .dest = temp_reg,
+                } });
+
+                try worker.instructions.append(self.allocator, Instruction{ .table_set_by_str = .{
+                    .table = table_operand,
+                    .field = func_name,
+                    .value = temp_reg,
+                } });
+            }
+        },
+        .Break => {
+            try worker.instructions.append(self.allocator, .bruh_just_break);
+        },
         else => |a| std.debug.panic("TODO {}\n", .{a}),
     }
+}
+
+// returns constant
+pub fn createFunction(self: *@This(), name: []const u8, body: AST.FuncBody, worker: *Worker) !u12 {
+    var function = try Object.ObjFunction.createIndependant(
+        self.allocator,
+        name,
+        body.Params.Names,
+        body.Params.HasVararg,
+    );
+
+    var new_worker = Worker{
+        .function = function,
+        .allocator = self.allocator,
+        .previous_worker = worker,
+    };
+    defer new_worker.deinit();
+
+    for (body.Params.Names) |n| {
+        _ = try new_worker.getOrCreateLocalData(n, false);
+    }
+
+    if (body.Block.len > 0) {
+        try self.compileBlock(body.Block, &new_worker);
+    }
+
+    function.instructions = try new_worker.instructions.toOwnedSlice(self.allocator);
+    function.constants = try new_worker.constants.toOwnedSlice(self.allocator);
+    function.upvalues = try new_worker.upvalues.toOwnedSlice(self.allocator);
+
+    const function_constant = try worker.putConstant(function.object.asValue());
+    return function_constant;
 }
 
 pub fn putOptimizedBin(self: *@This(), lhs: Instruction.Operand, rhs: Instruction.Operand, dest: Instruction.Operand, op: AST.BinaryOp, worker: *Worker) !void {

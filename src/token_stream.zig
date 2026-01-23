@@ -97,7 +97,7 @@ pub fn skipUnreadable(self: *@This()) void {
                             _ = self.advance();
                         }
                     } else {
-                        while (self.peek() != '\n') {
+                        while (self.peek() != '\n' and !self.isEOF()) {
                             _ = self.advance();
                         }
                         self.location.line += 1;
