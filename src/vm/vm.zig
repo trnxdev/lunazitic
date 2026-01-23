@@ -26,7 +26,7 @@ internals: struct {
 values: std.ArrayListUnmanaged(*Object.ObjObject),
 gc_marked: std.AutoHashMap(*Object.ObjObject, void),
 gc_gray: std.ArrayListUnmanaged(*Object.ObjObject) = .empty,
-gc_threshold: usize = 1024,
+gc_threshold: usize = 4096,
 gc_needed: bool = false,
 current_scope_index: usize = 0,
 current_scope: ?*Scope = null,
@@ -780,19 +780,23 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
             else
                 try Object.ObjTuple.createOwned(self, &.{});
         },
-        .call_func_args => {},
-        .call_func => |cf| {
-            const cfa = closure.func.instructions[scope.pc - 1];
-            std.debug.assert(cfa == .call_func_args);
-
+        .call_func_args => |cfa| {
+            const next_instr = closure.func.instructions[scope.pc + 1];
+            std.debug.assert(next_instr == .call_func);
+            const cf = next_instr.call_func;
             const function = self.getOperand(cf.func, closure, scope);
 
             var buf: [1024]Value = undefined;
-            const reg_values = try self.resolveOperandListToBuf(cfa.call_func_args.args, &buf, closure, scope);
-            const result = try self.callFunction(function, scope, buf[0..reg_values], cfa.call_func_args.has_tuple);
+            const reg_values = try self.resolveOperandListToBuf(cfa.args, &buf, closure, scope);
+            const result = try self.callFunction(function, scope, buf[0..reg_values], cfa.has_tuple);
 
             if (cf.dest) |dest|
                 (try self.getOperandPtr(dest, closure, scope)).* = result;
+
+            scope.pc += 1;
+        },
+        .call_func => |_| {
+            unreachable;
         },
         .copy => |c| {
             (try self.getOperandPtr(c.dest, closure, scope)).* = self.getOperand(c.src, closure, scope);
@@ -801,6 +805,7 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
             const tuple = self.getOperand(cffit.src, closure, scope);
 
             if (tuple.isObjectOfType(.Tuple)) {
+                @branchHint(.likely);
                 const tuple_obj: *Object.ObjTuple = tuple.asObjectOfType(.Tuple);
                 (try self.getOperandPtr(cffit.dest, closure, scope)).* = if (tuple_obj.values.len == 0) Value.initNil() else tuple_obj.values[0];
             } else {
@@ -1018,8 +1023,10 @@ pub fn callFunction(self: *@This(), func: Value, scope: *Scope, given_args: []Va
         return native_func.func(self, scope, args);
     }
 
-    if (!func.isObjectOfType(.Closure))
+    if (!func.isObjectOfType(.Closure)) {
+        @branchHint(.unlikely);
         return self.errorFmt(error.InvalidCaller, "Expected function (closure), got {f}", .{func});
+    }
 
     const closure: *Object.ObjClosure = func.asObjectOfType(.Closure);
     const new_scope = try self.newScope(scope);
@@ -1032,7 +1039,7 @@ pub fn callFunction(self: *@This(), func: Value, scope: *Scope, given_args: []Va
     }
 
     if (closure.func.var_arg and args.len > closure.func.params.len) {
-        const varargs = try self.allocator.alloc(Value, args.len - closure.func.params.len);
+        var varargs = try self.allocator.alloc(Value, args.len - closure.func.params.len);
 
         for (closure.func.params.len..args.len) |i|
             varargs[i] = args[i];

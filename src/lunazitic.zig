@@ -45,6 +45,23 @@ pub fn doString(self: *API, string: []const u8) !?Value {
     const closure = try self.compileStringToClosure(string);
     defer closure.object.deinit(self.allocator);
 
+    // count all instructions, sort them by frequency, assign opcodes and print it
+    var instr_usize: [255]usize = std.mem.zeroes([255]usize);
+    var all_instr_count: usize = 0;
+    for (closure.func.instructions) |instr| {
+        all_instr_count += 1;
+        instr_usize[@as(usize, @intFromEnum(std.meta.activeTag(instr)))] += 1;
+    }
+
+    std.log.info("Total instructions executed: {d}", .{all_instr_count});
+    for (instr_usize, 0..) |count, idx| {
+        if (idx > @typeInfo(std.meta.Tag(Compiler.Instruction)).@"enum".fields.len - 1) {
+            break;
+        }
+
+        std.log.info("Instruction {any}: {d} occurrences", .{ @as(std.meta.Tag(Compiler.Instruction), @enumFromInt(idx)), count });
+    }
+
     self.vm.global_symbol_map = self.compiler.global_symbol_map.items;
 
     try self.vm.runClosure(closure, root_scope);
