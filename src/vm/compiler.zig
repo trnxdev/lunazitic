@@ -41,24 +41,6 @@ pub const Instruction = union(enum) {
         dest: Operand,
         op: AST.BinaryOp,
     },
-    triple_reg_bin: struct {
-        lhs: Instruction.Reg,
-        rhs: Instruction.Reg,
-        dest: Instruction.Reg,
-        op: AST.BinaryOp,
-    },
-    llr_bin: struct {
-        lhs_local: Instruction.Symbol,
-        rhs_local: Instruction.Symbol,
-        dest: Instruction.Reg,
-        op: AST.BinaryOp,
-    },
-    rlr_bin: struct {
-        lhs: Instruction.Reg,
-        rhs_local: Instruction.Symbol,
-        dest: Instruction.Reg,
-        op: AST.BinaryOp,
-    },
     table_append: struct {
         table: Operand,
         value: Operand,
@@ -780,43 +762,14 @@ pub fn compileStat(self: *@This(), stat: AST.Stat, worker: *Worker) anyerror!voi
 }
 
 pub fn putOptimizedBin(self: *@This(), lhs: Instruction.Operand, rhs: Instruction.Operand, dest: Instruction.Operand, op: AST.BinaryOp, worker: *Worker) !void {
-    if (lhs == .register and rhs == .register and dest == .register) {
-        try worker.instructions.append(self.allocator, Instruction{
-            .triple_reg_bin = .{
-                .lhs = lhs.register,
-                .rhs = rhs.register,
-                .dest = dest.register,
-                .op = op,
-            },
-        });
-    } else if (lhs == .local and rhs == .local and dest == .register) {
-        try worker.instructions.append(self.allocator, Instruction{
-            .llr_bin = .{
-                .lhs_local = lhs.local,
-                .rhs_local = rhs.local,
-                .dest = dest.register,
-                .op = op,
-            },
-        });
-    } else if (lhs == .register and rhs == .local and dest == .register) {
-        try worker.instructions.append(self.allocator, Instruction{
-            .rlr_bin = .{
-                .lhs = lhs.register,
-                .rhs_local = rhs.local,
-                .dest = dest.register,
-                .op = op,
-            },
-        });
-    } else {
-        try worker.instructions.append(self.allocator, Instruction{
-            .bin = .{
-                .lhs = lhs,
-                .rhs = rhs,
-                .dest = dest,
-                .op = op,
-            },
-        });
-    }
+    try worker.instructions.append(self.allocator, Instruction{
+        .bin = .{
+            .lhs = lhs,
+            .rhs = rhs,
+            .dest = dest,
+            .op = op,
+        },
+    });
 }
 
 // Owner owns the register
@@ -829,8 +782,18 @@ pub fn compileExp(self: *@This(), exp: AST.Exp, worker: *Worker) anyerror!Instru
         .Prefix => |p| try self.compilePrefix(p.*, worker),
         .String => |string| try self.fetchString(worker, string),
         .Binary => |b| {
-            const lhs = try self.compileExp(b.Left.*, worker); // Also dest
+            var lhs = try self.compileExp(b.Left.*, worker); // Also dest
+            defer worker.freeReg(lhs);
 
+            if (worker.lastInstructionProducedTuple()) {
+                const dest = try worker.allocateReg();
+                try worker.instructions.append(self.allocator, Instruction{ .copy_first_from_if_tuple = .{
+                    .src = lhs,
+                    .dest = dest,
+                } });
+                worker.freeReg(lhs);
+                lhs = dest;
+            }
             // And and Or use short-cut evaluation, which
             // may not evaluate the right-hand side and
             // spend less time or not error out
@@ -1140,6 +1103,8 @@ pub fn funcCall(self: *@This(), fc: AST.FunctionCall, worker: *Worker, comptime 
 
     if (final_args.len > 255)
         return error.TooManyFunctionArguments;
+
+    has_tuple_result = true;
 
     try worker.instructions.append(self.allocator, Instruction{
         .call_func_args = .{

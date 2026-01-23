@@ -414,6 +414,10 @@ pub const ObjClosure = struct {
     func: *ObjFunction,
     upvalues: []*Value,
     defined_in_scope: ?*VM.Scope,
+    // When a scope that defined this closure is destroyed, upvalues that pointed
+    // into that scope are copied into a heap-allocated array. This holds that
+    // slice so we can free it when the closure is deinitialized.
+    closed_storage: ?[]Value = null,
 
     pub fn create(
         vm: *VM,
@@ -426,6 +430,7 @@ pub const ObjClosure = struct {
             .object = obj_closure,
             .upvalues = try vm.allocator.alloc(*Value, func.upvalues.len),
             .defined_in_scope = def_in_scope,
+            .closed_storage = null,
         } };
 
         func.ref_count += 1;
@@ -446,6 +451,7 @@ pub const ObjClosure = struct {
             .func = func,
             .upvalues = try allocator.alloc(*Value, func.upvalues.len),
             .defined_in_scope = def_in_scope,
+            .closed_storage = null,
         } };
 
         func.ref_count += 1;
@@ -462,6 +468,7 @@ pub const ObjClosure = struct {
             if (self.func.ref_count == 0)
                 self.func.object.deinit(allocator);
         }
+        if (self.closed_storage) |cs| allocator.free(cs);
         allocator.free(self.upvalues);
     }
 };

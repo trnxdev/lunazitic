@@ -43,8 +43,10 @@ const NumberCastOptions = packed struct {
     tuple: bool = false,
 };
 pub fn asNumberCast(self: Value, cast_options: NumberCastOptions) !f64 {
-    if (@call(.always_inline, isNumber, .{self}))
+    if (@call(.always_inline, isNumber, .{self})) {
+        @branchHint(.likely);
         return self.asNumber();
+    }
 
     if (self.isObjectOfType(.Tuple) and cast_options.tuple)
         return try self.asObjectOfType(.Tuple).values[0].asNumberCast(cast_options);
@@ -102,8 +104,6 @@ pub fn asStringCastNum(self: @This(), allocator: std.mem.Allocator) ![]const u8 
 
 pub fn format(
     self: @This(),
-    comptime _: []const u8,
-    _: std.fmt.FormatOptions,
     writer: anytype,
 ) !void {
     try VM.tostring_internal(self, writer);

@@ -425,7 +425,7 @@ pub fn assert(vm: *VM, scope: *Scope, args: []Value) anyerror!Value {
     else
         "assertion failed";
 
-    if (!args[0].asBool()) {
+    if (args[0].asBool() == false) {
         std.log.err("{s}", .{message});
         return error.AssertionFailed;
     }
@@ -507,6 +507,37 @@ pub fn destroyScope(self: *@This(), scope: *Scope) void {
     scope.internals.deinit(self.allocator);
     scope.internals = .empty;
 
+    // Before clearing locals, close upvalues for any closures that were
+    // defined in this scope. That copies the captured local values into
+    // heap storage so closures keep the correct values after the scope
+    // ends.
+    for (self.values.items) |obj| {
+        if (obj.* == .Closure) {
+            const clos = &obj.Closure;
+            if (clos.defined_in_scope == scope) {
+                if (clos.closed_storage == null) {
+                    const n = clos.func.upvalues.len;
+                    const closed = self.allocator.alloc(Value, n) catch @panic("Out of memory closing upvalues");
+
+                    for (0..n) |i| {
+                        const updata = clos.func.upvalues[i];
+                        if (updata.is_local)
+                            closed[i] = scope.locals[updata.symbol]
+                        else
+                            closed[i] = clos.upvalues[i].*;
+
+                        clos.upvalues[i] = &closed[i];
+                    }
+
+                    clos.closed_storage = closed;
+                }
+
+                // Mark that the upvalues are no longer tied to this scope.
+                clos.defined_in_scope = null;
+            }
+        }
+    }
+
     for (&scope.locals) |*local| local.* = Value.initNil();
     for (&scope.registers) |*reg| reg.* = Value.initNil();
 
@@ -554,7 +585,6 @@ pub inline fn bin_op(
     dest: *Value,
     scope: *Scope,
 ) !void {
-
     // FIXME Both and and or use short-cut evaluation, they come before evaluating rhs
     switch (op) {
         .Or, .And => std.debug.panic("Unreachable at {}", .{scope.pc}),
@@ -705,23 +735,6 @@ pub fn runInstr(self: *@This(), instr: Compiler.Instruction, closure: *Object.Ob
             const left = self.getOperand(b.lhs, closure, scope);
             const right = self.getOperand(b.rhs, closure, scope);
             const dest = try self.getOperandPtr(b.dest, closure, scope);
-
-            try self.bin_op(b.op, left, right, dest, scope);
-        },
-        .triple_reg_bin => |b| {
-            try self.bin_op(b.op, scope.registers[b.lhs], scope.registers[b.rhs], &scope.registers[b.dest], scope);
-        },
-        .llr_bin => |b| {
-            const left = scope.locals[b.lhs_local];
-            const right = scope.locals[b.rhs_local];
-            const dest = &scope.registers[b.dest];
-
-            try self.bin_op(b.op, left, right, dest, scope);
-        },
-        .rlr_bin => |b| {
-            const left = scope.registers[b.lhs];
-            const right = scope.locals[b.rhs_local];
-            const dest = &scope.registers[b.dest];
 
             try self.bin_op(b.op, left, right, dest, scope);
         },
@@ -920,8 +933,12 @@ pub fn callFunction(self: *@This(), func: Value, scope: *Scope, given_args: []Va
     try self.runClosure(closure, new_scope);
     defer self.destroyScope(new_scope);
 
-    if (new_scope.return_slot) |rs|
-        return rs.object.asValue();
+    if (new_scope.return_slot) |rs| {
+        if (rs.values.len > 1)
+            return rs.object.asValue();
+
+        return rs.values[0];
+    }
 
     return Value.initNil();
 }
