@@ -93,8 +93,10 @@ pub fn init(
     vm.internals.reference_to_next = try Object.ObjNativeFunction.create(vm, &next);
     vm.internals.reference_to_inner_ipairs = try Object.ObjNativeFunction.create(vm, &inner_ipairs);
 
-    try vm.global_vars.fields.putWithKeyObjectAuto("print", try Object.ObjNativeFunction.create(vm, &print));
+    try vm.global_vars.fields.putWithKeyObjectAuto("_G", vm.global_vars);
+    try vm.global_vars.fields.putWithKeyObjectAuto("_VERSION", try Object.ObjString.create(vm, "Lua 5.1"));
     try vm.global_vars.fields.putWithKeyObjectAuto("tostring", try Object.ObjNativeFunction.create(vm, &tostring));
+    try vm.global_vars.fields.putWithKeyObjectAuto("print", try Object.ObjNativeFunction.create(vm, &print));
     try vm.global_vars.fields.putWithKeyObjectAuto("assert", try Object.ObjNativeFunction.create(vm, &assert));
     try vm.global_vars.fields.putWithKeyObjectAuto("select", try Object.ObjNativeFunction.create(vm, &select));
     try vm.global_vars.fields.putWithKeyObjectAuto("type", try Object.ObjNativeFunction.create(vm, &type_fn));
@@ -103,8 +105,6 @@ pub fn init(
     try vm.global_vars.fields.putWithKeyObjectAuto("error", try Object.ObjNativeFunction.create(vm, &error_fn));
     try vm.global_vars.fields.putWithKeyObjectAuto("pairs", try Object.ObjNativeFunction.create(vm, &pairs));
     try vm.global_vars.fields.putWithKeyObjectAuto("ipairs", try Object.ObjNativeFunction.create(vm, &ipairs));
-    try vm.global_vars.fields.putWithKeyObjectAuto("_G", vm.global_vars);
-    try vm.global_vars.fields.putWithKeyObjectAuto("_VERSION", try Object.ObjString.create(vm, "Lua 5.1"));
 
     // String STD + Primitive Metatable
     const string_table = &vm.metatables_for_primitives[@intFromEnum(MpType.String)];

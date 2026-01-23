@@ -8,6 +8,7 @@ const NativeFunction = VM.Object.ObjNativeFunction;
 
 pub fn init(vm: *VM) !VM.Value {
     const math = try VM.Object.ObjTable.create(vm);
+
     try math.fields.putWithKeyObjectAuto("abs", try NativeFunction.create(vm, &abs));
     try math.fields.putWithKeyObjectAuto("acos", try NativeFunction.create(vm, &acos));
     try math.fields.putWithKeyObjectAuto("asin", try NativeFunction.create(vm, &asin));
@@ -39,12 +40,14 @@ pub fn init(vm: *VM) !VM.Value {
     try math.fields.putWithKey("huge", VM.Value.initNumber(huge));
     try math.fields.putWithKey("pi", VM.Value.initNumber(pi));
 
-    // Function math.mod was renamed math.fmod. (See compile-time option LUA_COMPAT_MOD in luaconf.h.)
+    // Function math.mod was renamed math.fmod. 
+    // Note from Lua C impl: (See compile-time option LUA_COMPAT_MOD in luaconf.h.)
     try math.fields.putWithKeyObjectAuto("mod", try NativeFunction.create(vm, &fmod));
+    
     return math.object.asValue();
 }
 
-// just making @abs doesn't work, and std.math.abs doesn't exist
+
 // zig fmt: off
 pub const abs = makeSimpleMathFunc(struct { pub fn abs(num: f64) f64 {
         return @abs(num); // math.abs (x) - Returns the absolute value of x.

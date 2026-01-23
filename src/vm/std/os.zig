@@ -1,15 +1,49 @@
 const std = @import("std");
 const VM = @import("../vm.zig");
 const Value = @import("../value.zig");
-
+const TODO = @import("todo.zig").TODO;
 const NativeFunction = VM.Object.ObjNativeFunction;
 
 pub fn init(vm: *VM) !VM.Value {
     const os_table = try VM.Object.ObjTable.create(vm);
+
     try os_table.fields.putWithKeyObjectAuto("clock", try NativeFunction.create(vm, &clock));
-    try os_table.fields.putWithKeyObjectAuto("getenv", try NativeFunction.create(vm, &getenv));
+    try os_table.fields.putWithKeyObjectAuto("date", try NativeFunction.create(vm, TODO("os.date", null)));
+    try os_table.fields.putWithKeyObjectAuto("difftime", try NativeFunction.create(vm, TODO("os.difftime", null)));
     try os_table.fields.putWithKeyObjectAuto("execute", try NativeFunction.create(vm, &execute));
+    try os_table.fields.putWithKeyObjectAuto("exit", try NativeFunction.create(vm, TODO("os.exit", null)));
+    try os_table.fields.putWithKeyObjectAuto("getenv", try NativeFunction.create(vm, &getenv));
+    try os_table.fields.putWithKeyObjectAuto("remove", try NativeFunction.create(vm, TODO("os.remove", null)));
+    try os_table.fields.putWithKeyObjectAuto("rename", try NativeFunction.create(vm, TODO("os.rename", null)));
+    try os_table.fields.putWithKeyObjectAuto("setlocale", try NativeFunction.create(vm, TODO("os.setlocale", null)));
+    try os_table.fields.putWithKeyObjectAuto("time", try NativeFunction.create(vm, TODO("os.time", null)));
+    try os_table.fields.putWithKeyObjectAuto("tmpname", try NativeFunction.create(vm, &tmpname));
+
     return os_table.object.asValue();
+}
+
+const tmpchars = std.ascii.letters;
+const TMPCHAR_MIN = 0;
+const TMPCHAR_MAX = tmpchars.len - 1;
+
+pub fn tmpname(vm: *VM, _: *VM.Scope, _: []VM.Value) anyerror!VM.Value {
+    // TODO: don't reinit it every time, for now it's fine.
+    var rng = std.Random.DefaultPrng.init(blk: {
+        var seed: u64 = undefined;
+        try std.posix.getrandom(std.mem.asBytes(&seed));
+        break :blk seed;
+    });
+
+    var string = try vm.allocator.dupe(u8, "/tmp/lua_012345");
+    const REPLACE_BEGIN: usize = 9;
+    const REPLACE_END = string.len;
+
+    for (string[REPLACE_BEGIN .. REPLACE_END]) |*c| {
+        const idx = rng.random().intRangeAtMost(usize, TMPCHAR_MIN, TMPCHAR_MAX);
+        c.* = tmpchars[idx];
+    }
+
+    return (try VM.Object.ObjString.createMoved(vm, string)).object.asValue();
 }
 
 pub fn clock(vm: *VM, _: *VM.Scope, _: []VM.Value) anyerror!VM.Value {
